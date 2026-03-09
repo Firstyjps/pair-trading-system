@@ -194,6 +194,48 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
     next();
   });
 
+  // ─── Health Check ───
+  router.get('/health', (_req: Request, res: Response) => {
+    try {
+      const openCount = queries.getOpenPositionCount();
+      const pnl = queries.getRealizedPnl();
+      res.json({
+        status: 'ok',
+        uptime: process.uptime(),
+        openPositions: openCount,
+        totalTrades: pnl.count,
+        realizedPnl: pnl.total,
+      });
+    } catch (err) {
+      res.status(500).json({ status: 'error', error: String(err) });
+    }
+  });
+
+  // ─── Export CSV ───
+  router.get('/export/trades.csv', (req: Request, res: Response) => {
+    try {
+      const limit = parseQueryLimit(req.query.limit, 500);
+      const positions = queries.getClosedPositions(limit);
+      const headers = ['id', 'pair', 'direction', 'pnl', 'close_reason', 'opened_at', 'closed_at'];
+      const rows = positions.map(p => [
+        p.id,
+        p.pair,
+        p.direction,
+        p.pnl?.toFixed(2) ?? '',
+        p.close_reason ?? '',
+        p.opened_at,
+        p.closed_at ?? '',
+      ].join(','));
+      const csv = [headers.join(','), ...rows].join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=trades.csv');
+      res.send(csv);
+    } catch (err) {
+      log.error({ error: err }, 'Export CSV error');
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // ─── Overview ───
   router.get('/overview', (_req: Request, res: Response) => {
     try {

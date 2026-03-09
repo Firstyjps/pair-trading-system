@@ -26,6 +26,7 @@ import {
   getStartupTime,
 } from './lifecycle.js';
 import { logger } from './logger.js';
+import cron from 'node-cron';
 
 // ─── In-memory caches for spread monitoring ───
 const betaCache = new Map<string, number>();
@@ -73,6 +74,21 @@ async function main() {
   // Register shutdown handlers
   registerShutdownHandlers(async () => {
     logger.info('Shutting down gracefully...');
+    try {
+      const backupPath = getTradingConfig().dbBackupPath;
+      if (backupPath) {
+        const fs = await import('fs');
+        const path = await import('path');
+        const dbPath = envConfig.DB_PATH ?? './data/trading.db';
+        const dir = path.resolve(backupPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const dest = path.join(dir, `trading-${Date.now()}.db`);
+        fs.copyFileSync(dbPath, dest);
+        logger.info({ dest }, 'DB backup created');
+      }
+    } catch (err) {
+      logger.warn({ error: err }, 'DB backup failed (non-fatal)');
+    }
     queries.close();
   });
 
@@ -125,6 +141,40 @@ async function main() {
           },
           queries,
         );
+      },
+      onTrades: async (limit) => {
+        const closed = queries.getClosedPositions(limit);
+        if (closed.length === 0) return '📋 ไม่มีประวัติเทรด';
+        const lines = closed.map(p => {
+          const emoji = (p.pnl ?? 0) >= 0 ? '🟢' : '🔴';
+          return `${emoji} ${p.pair} $${(p.pnl ?? 0).toFixed(2)} (${p.close_reason ?? '-'})`;
+        });
+        return `📋 *ประวัติเทรด* (${closed.length})\n${lines.join('\n')}`;
+      },
+      onAlerts: async () => {
+        const alerts = queries.getAlerts(envConfig.TELEGRAM_CHAT_ID);
+        return alerts.map(a => ({
+          id: a.id,
+          pair: a.pair ?? undefined,
+          type: a.type,
+          target: a.target_value ?? 0,
+        }));
+      },
+      onAddAlert: async (pair, type, target) => {
+        const { v4: uuid } = await import('uuid');
+        const id = uuid().slice(0, 8);
+        queries.insertAlert({
+          id,
+          chat_id: envConfig.TELEGRAM_CHAT_ID,
+          type,
+          pair,
+          target_value: target,
+        });
+        return `✅ เพิ่ม alert: ${pair} ${type} @ ${target} (id: ${id})`;
+      },
+      onDeleteAlert: async (id) => {
+        queries.deleteAlert(id);
+        return 'deleted';
       },
     },
   );
@@ -402,6 +452,12 @@ async function main() {
       logger.info({ pair, signalId }, 'Auto-trading disabled in config — skipping order placement');
       return;
     }
+    // Circuit breaker: หยุดเปิด position หลังขาดทุนติดกัน X ครั้ง
+    const consecutiveLosses = queries.getConsecutiveLosses();
+    if (consecutiveLosses >= (config.circuitBreakerLosses ?? 3)) {
+      logger.warn({ consecutiveLosses, threshold: config.circuitBreakerLosses }, 'Circuit breaker active — skipping new positions');
+      return;
+    }
     const [symbolA, symbolB] = pair.split('/');
     const instrumentA = `${symbolA}-USDT-SWAP`;
     const instrumentB = `${symbolB}-USDT-SWAP`;
@@ -571,11 +627,11 @@ async function main() {
 
       // Process exits
       for (const update of updates) {
-        if (update.action === 'EXIT_TP' || update.action === 'EXIT_SL') {
+        if (update.action === 'EXIT_TP' || update.action === 'EXIT_SL' || update.action === 'EXIT_TRAILING') {
           const position = queries.getPosition(update.positionId);
           if (!position) continue;
 
-          const reason = update.action === 'EXIT_TP' ? 'TP' : 'SL';
+          const reason = update.action === 'EXIT_TP' ? 'TP' : update.action === 'EXIT_TRAILING' ? 'MANUAL' : 'SL';
           await notifications.positionClosing(position);
 
           const result = await closePairPosition(exchangeAdapter, queries, position, reason);
@@ -587,6 +643,14 @@ async function main() {
               `Failed to close ${update.pair} (${reason}): ${result.error}`,
               'spread-monitor',
             );
+          }
+        }
+        // Check z-score alerts for this pair
+        const alerts = queries.getAlerts(undefined, update.pair);
+        for (const a of alerts) {
+          if (a.type === 'zscore' && a.target_value != null && Math.abs(update.currentZ) >= Math.abs(a.target_value)) {
+            await notifications.sendToChat(a.chat_id, `🔔 *Alert* ${update.pair} Z-Score ถึง ${update.currentZ.toFixed(2)} (target: ${a.target_value})`);
+            queries.deleteAlert(a.id);
           }
         }
       }
@@ -647,11 +711,30 @@ async function main() {
           Promise.resolve(queries.getOpenPositions()),
         ]);
         const realized = queries.getRealizedPnl();
+        const totalUnrealized = exchangePositions.filter(p => p.size > 0).reduce((s, p) => s + p.unrealizedPnl, 0);
+        const totalPnl = realized.total + totalUnrealized;
+        const totalBalance = balance.totalEquity;
+
+        // แจ้งเตือนขาดทุนเกินเกณฑ์
+        const config = getTradingConfig();
+        if (totalPnl < 0 && (config.lossAlertThresholdUsd > 0 || config.lossAlertThresholdPct > 0)) {
+          const lossUsd = Math.abs(totalPnl);
+          const lossPct = totalBalance > 0 ? (lossUsd / totalBalance) * 100 : 0;
+          if (lossUsd >= config.lossAlertThresholdUsd || lossPct >= config.lossAlertThresholdPct) {
+            await notifications.lossAlert(
+              'ยอดรวมขาดทุนเกินเกณฑ์',
+              lossUsd,
+              lossPct,
+              totalBalance,
+            );
+          }
+        }
+
         const message = buildPnLReport(
           {
             pairPositions,
             exchangePositions,
-            totalBalance: balance.totalEquity,
+            totalBalance,
             realizedPnl: realized.total,
           },
           queries,
@@ -689,6 +772,45 @@ async function main() {
     }, 60000);
   } else {
     logger.info('PnL report disabled (pnlReportIntervalMs = 0)');
+  }
+
+  // ═══ 8. Weekly/Monthly Summary (Cron) ═══
+  const weeklyCron = tradingConfig.weeklySummaryCron;
+  const monthlyCron = tradingConfig.monthlySummaryCron;
+  if (weeklyCron && cron.validate(weeklyCron)) {
+    cron.schedule(weeklyCron, async () => {
+      try {
+        const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const stats = queries.getRealizedPnlSince(cutoff);
+        await notifications.periodSummary('weekly', {
+          totalPnl: stats.total,
+          trades: stats.count,
+          wins: stats.wins,
+          winRate: stats.count > 0 ? stats.wins / stats.count : 0,
+        });
+      } catch (err) {
+        logger.error({ error: err }, 'Weekly summary error');
+      }
+    });
+    logger.info({ cron: weeklyCron }, 'Weekly summary scheduled');
+  }
+  if (monthlyCron && cron.validate(monthlyCron)) {
+    cron.schedule(monthlyCron, async () => {
+      try {
+        const d = new Date();
+        const cutoff = new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+        const stats = queries.getRealizedPnlSince(cutoff);
+        await notifications.periodSummary('monthly', {
+          totalPnl: stats.total,
+          trades: stats.count,
+          wins: stats.wins,
+          winRate: stats.count > 0 ? stats.wins / stats.count : 0,
+        });
+      } catch (err) {
+        logger.error({ error: err }, 'Monthly summary error');
+      }
+    });
+    logger.info({ cron: monthlyCron }, 'Monthly summary scheduled');
   }
 
   // ═══ System Ready ═══

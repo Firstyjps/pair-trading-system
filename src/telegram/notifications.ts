@@ -4,6 +4,7 @@ import type { PairPosition, Signal } from '../types.js';
 import type { OrphanPosition } from '../monitor/orphan-detector.js';
 import { getTradingConfig } from '../config.js';
 import { createChildLogger } from '../logger.js';
+import { sendWebhook } from '../webhook.js';
 
 const log = createChildLogger('notifications');
 
@@ -50,6 +51,9 @@ export class NotificationService {
 
     try {
       await this.sender.sendMessage(this.chatId, message);
+      if (['ERROR', 'ORPHAN', 'CLOSED', 'LOSS_ALERT'].includes(type)) {
+        sendWebhook(type, { message }).catch(() => {});
+      }
 
       // Record in both memory and DB
       this.sentKeys.add(dedupKey);
@@ -122,6 +126,19 @@ export class NotificationService {
     ].join('\n');
 
     await this.send('CLOSED', message, dedupKey);
+
+    // สรุปสั้น (แบบ Pairtrading bot) — position ที่ขาดทุนมากสุด
+    const pnl = position.pnl ?? 0;
+    if (pnl < 0) {
+      const realized = this.queries.getRealizedPnl();
+      const shortMsg = [
+        `🔴 ${position.pair} (${position.direction === 'SHORT_SPREAD' ? 'short' : 'long'}): $${pnl.toFixed(2)}`,
+        '─── สรุป ───',
+        `กำไร/ขาดทุนรวม: ${realized.total >= 0 ? '+' : ''}$${realized.total.toFixed(2)}`,
+        `⏰ ${new Date().toLocaleString('th-TH')}`,
+      ].join('\n');
+      await this.send('CLOSED_SHORT', shortMsg, `${position.pair}:CLOSED_SHORT:${Math.floor(Date.now() / 60000)}`);
+    }
   }
 
   async errorAlert(error: string, context?: string): Promise<void> {
@@ -172,6 +189,49 @@ export class NotificationService {
   async pnlReport(message: string): Promise<void> {
     const bucket = Math.floor(Date.now() / 300000); // 5-minute bucket
     await this.send('PNL_REPORT', message, `pnl:${bucket}`);
+  }
+
+  /** แจ้งเตือนเมื่อขาดทุนเกินเกณฑ์ */
+  async lossAlert(
+    context: string,
+    lossUsd: number,
+    lossPct: number,
+    totalBalance: number,
+  ): Promise<void> {
+    const dedupKey = this.getDedupKey('loss', 'LOSS_ALERT');
+    const message = [
+      `🔴 *แจ้งเตือนขาดทุน*`,
+      context,
+      `ขาดทุน: $${lossUsd.toFixed(2)} (${lossPct.toFixed(1)}%)`,
+      `ยอดเงิน: $${totalBalance.toFixed(2)}`,
+    ].join('\n');
+    await this.send('LOSS_ALERT', message, dedupKey);
+  }
+
+  /** รายงานสัปดาห์/เดือน */
+  async periodSummary(
+    period: 'weekly' | 'monthly',
+    stats: { totalPnl: number; trades: number; wins: number; winRate: number },
+  ): Promise<void> {
+    const dedupKey = this.getDedupKey(period, 'PERIOD_SUMMARY');
+    const label = period === 'weekly' ? 'รายสัปดาห์' : 'รายเดือน';
+    const message = [
+      `📅 *สรุป${label}*`,
+      `กำไร/ขาดทุน: ${stats.totalPnl >= 0 ? '+' : ''}$${stats.totalPnl.toFixed(2)}`,
+      `จำนวนเทรด: ${stats.trades}`,
+      `ชนะ: ${stats.wins} | Win Rate: ${(stats.winRate * 100).toFixed(1)}%`,
+    ].join('\n');
+    await this.send('PERIOD_SUMMARY', message, dedupKey);
+  }
+
+  /** Send to specific chat (for alerts) — no dedup */
+  async sendToChat(chatId: string, message: string): Promise<void> {
+    try {
+      await this.sender.sendMessage(chatId, message);
+      log.info({ chatId }, 'Alert sent');
+    } catch (err) {
+      log.error({ chatId, error: err }, 'Failed to send alert');
+    }
   }
 
   clearMemoryCache(): void {

@@ -17,6 +17,11 @@ export function registerCommands(
   onClosePair?: (pair: string) => Promise<string>,
   onBacktest?: (pair: string, days: number) => Promise<string>,
   onPnlReport?: () => Promise<string>,
+  onTrades?: (limit: number) => Promise<string>,
+  onAlerts?: () => Promise<Array<{ id: string; pair?: string; type: string; target: number }>>,
+  onAddAlert?: (pair: string, type: string, target: number) => Promise<string>,
+  onDeleteAlert?: (id: string) => Promise<string>,
+  chatId?: string,
 ) {
   return {
     async status(ctx: CommandContext) {
@@ -148,6 +153,66 @@ export function registerCommands(
       } catch (err: any) {
         await ctx.reply(`❌ Error: ${err.message}`);
       }
+    },
+
+    async trades(ctx: CommandContext, limit?: string, onTrades?: (n: number) => Promise<string>) {
+      const n = Math.min(parseInt(limit || '10', 10) || 10, 50);
+      if (!onTrades) {
+        await ctx.reply('Trades not configured.');
+        return;
+      }
+      try {
+        const msg = await onTrades(n);
+        await ctx.reply(msg);
+      } catch (err: any) {
+        await ctx.reply(`❌ Error: ${err.message}`);
+      }
+    },
+
+    async alert(ctx: CommandContext, subcmd?: string, arg1?: string, arg2?: string, arg3?: string) {
+      if (subcmd === 'list' && onAlerts) {
+        try {
+          const alerts = await onAlerts();
+          if (alerts.length === 0) {
+            await ctx.reply('ไม่มี alert ที่ตั้งไว้');
+            return;
+          }
+          const lines = alerts.map(a => `• \`${a.id}\` ${a.pair ?? 'all'} ${a.type} @ ${a.target}`);
+          await ctx.reply(`🔔 *Alerts*\n${lines.join('\n')}`);
+        } catch (err: any) {
+          await ctx.reply(`❌ ${err.message}`);
+        }
+        return;
+      }
+      if (subcmd === 'del' && arg1 && onDeleteAlert) {
+        try {
+          await onDeleteAlert(arg1);
+          await ctx.reply('✅ ลบ alert แล้ว');
+        } catch (err: any) {
+          await ctx.reply(`❌ ${err.message}`);
+        }
+        return;
+      }
+      if (subcmd === 'add' && arg1 && arg2 && arg3 && onAddAlert) {
+        const target = parseFloat(arg3);
+        if (isNaN(target)) {
+          await ctx.reply('Usage: /alert add PAIR/BASE zscore 2.5');
+          return;
+        }
+        try {
+          const msg = await onAddAlert(arg1, arg2, target);
+          await ctx.reply(msg);
+        } catch (err: any) {
+          await ctx.reply(`❌ ${err.message}`);
+        }
+        return;
+      }
+      await ctx.reply(
+        'Usage:\n' +
+        '• /alert list — แสดง alerts\n' +
+        '• /alert add PAIR/BASE zscore 2.5 — แจ้งเมื่อ z-score ถึง 2.5\n' +
+        '• /alert del <id> — ลบ alert'
+      );
     },
 
     async orphans(ctx: CommandContext) {

@@ -26,6 +26,10 @@ export function createTelegramBot(
     onClosePair?: (pair: string) => Promise<string>;
     onBacktest?: (pair: string, days: number) => Promise<string>;
     onPnlReport?: () => Promise<string>;
+    onTrades?: (limit: number) => Promise<string>;
+    onAlerts?: () => Promise<Array<{ id: string; pair?: string; type: string; target: number }>>;
+    onAddAlert?: (pair: string, type: string, target: number) => Promise<string>;
+    onDeleteAlert?: (id: string) => Promise<string>;
   },
 ): { bot: TelegramBotAdapter; notifications: NotificationService } {
   const commands = registerCommands(
@@ -36,6 +40,11 @@ export function createTelegramBot(
     callbacks?.onClosePair,
     callbacks?.onBacktest,
     callbacks?.onPnlReport,
+    callbacks?.onTrades,
+    callbacks?.onAlerts,
+    callbacks?.onAddAlert,
+    callbacks?.onDeleteAlert,
+    chatId,
   );
 
   const notifications = new NotificationService(notificationSender, queries, chatId);
@@ -50,6 +59,8 @@ export function createTelegramBot(
   botAdapter.onCommand('backtest', (ctx, pair, days) => commands.backtest(ctx, pair, days));
   botAdapter.onCommand('pnl', (ctx) => commands.pnl(ctx));
   botAdapter.onCommand('pnlreport', (ctx) => commands.pnlreport(ctx, callbacks?.onPnlReport));
+  botAdapter.onCommand('trades', (ctx, ...args) => commands.trades(ctx, args[0], callbacks?.onTrades));
+  botAdapter.onCommand('alert', (ctx, ...args) => commands.alert(ctx, args[0], args[1], args[2], args[3]));
   botAdapter.onCommand('orphans', (ctx) => commands.orphans(ctx));
 
   // Register singleton (RULE 5)

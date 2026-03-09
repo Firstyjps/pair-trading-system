@@ -143,6 +143,30 @@ export class TradingQueries {
     return row;
   }
 
+  getRealizedPnlSince(cutoff: string): { total: number; count: number; wins: number } {
+    const row = this.db.prepare(`
+      SELECT
+        COALESCE(SUM(pnl), 0) as total,
+        COUNT(*) as count,
+        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins
+      FROM positions
+      WHERE state = 'CLOSED' AND pnl IS NOT NULL AND closed_at >= ?
+    `).get(cutoff) as { total: number; count: number; wins: number };
+    return row;
+  }
+
+  getConsecutiveLosses(): number {
+    const closed = this.db.prepare(
+      `SELECT pnl FROM positions WHERE state = 'CLOSED' AND pnl IS NOT NULL ORDER BY closed_at DESC LIMIT 20`
+    ).all() as { pnl: number }[];
+    let count = 0;
+    for (const r of closed) {
+      if (r.pnl <= 0) count++;
+      else break;
+    }
+    return count;
+  }
+
   // ─── Signal Queries ───
 
   insertSignal(signal: Signal): void {
@@ -297,6 +321,36 @@ export class TradingQueries {
     return (this.db.prepare(
       'SELECT DISTINCT pair FROM z_score_history ORDER BY pair'
     ).all() as { pair: string }[]).map(r => r.pair);
+  }
+
+  // ─── Alerts ───
+
+  insertAlert(alert: { id: string; chat_id: string; type: string; pair?: string; target_value?: number }): void {
+    this.db.prepare(`
+      INSERT INTO alerts (id, chat_id, type, pair, target_value, created_at)
+      VALUES (@id, @chat_id, @type, @pair, @target_value, @created_at)
+    `).run({
+      ...alert,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  getAlerts(chatId?: string, pair?: string): Array<{ id: string; chat_id: string; type: string; pair: string | null; target_value: number | null }> {
+    let sql = 'SELECT id, chat_id, type, pair, target_value FROM alerts WHERE 1=1';
+    const params: string[] = [];
+    if (chatId) {
+      sql += ' AND chat_id = ?';
+      params.push(chatId);
+    }
+    if (pair) {
+      sql += ' AND (pair = ? OR pair IS NULL)';
+      params.push(pair);
+    }
+    return this.db.prepare(sql).all(...params) as any[];
+  }
+
+  deleteAlert(id: string): void {
+    this.db.prepare('DELETE FROM alerts WHERE id = ?').run(id);
   }
 
   // ─── Utility ───

@@ -11,17 +11,23 @@ interface Migration {
 
 // Add future migrations here
 const migrations: Migration[] = [
-  // Example future migration:
-  // {
-  //   version: 2,
-  //   description: 'Add fee tracking columns to positions',
-  //   up: (db) => {
-  //     db.exec(`
-  //       ALTER TABLE positions ADD COLUMN leg_a_fee REAL DEFAULT 0;
-  //       ALTER TABLE positions ADD COLUMN leg_b_fee REAL DEFAULT 0;
-  //     `);
-  //   },
-  // },
+  {
+    version: 2,
+    description: 'Add alerts table + metadata columns for partial TP',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS alerts (
+          id TEXT PRIMARY KEY,
+          chat_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          pair TEXT,
+          target_value REAL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_alerts_chat_pair ON alerts(chat_id, pair);
+      `);
+    },
+  },
 ];
 
 /**

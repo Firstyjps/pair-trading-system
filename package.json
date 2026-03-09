@@ -6,6 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "test": "node node_modules/vitest/dist/cli.js run",
+    "test:telegram": "tsx src/test-telegram.ts",
     "test:watch": "node node_modules/vitest/dist/cli.js",
     "test:coverage": "node node_modules/vitest/dist/cli.js run --coverage",
     "web": "tsx src/web/server.ts",

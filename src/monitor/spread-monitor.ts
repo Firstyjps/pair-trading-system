@@ -16,7 +16,7 @@ export interface SpreadUpdate {
   pair: string;
   currentZ: number;
   spread: number;
-  action: 'HOLD' | 'EXIT_TP' | 'EXIT_SL';
+  action: 'HOLD' | 'EXIT_TP' | 'EXIT_SL' | 'EXIT_TRAILING';
 }
 
 /**
@@ -64,6 +64,7 @@ export async function checkSpreads(
 
       // Determine action
       let action: SpreadUpdate['action'] = 'HOLD';
+      let metadata = pos.metadata;
 
       if (shouldTriggerTakeProfit(zScore, config.exitZScore)) {
         action = 'EXIT_TP';
@@ -71,6 +72,23 @@ export async function checkSpreads(
       } else if (shouldTriggerStopLoss(pos.opened_at, zScore, config.stopLossZScore, config.gracePeriodMs)) {
         action = 'EXIT_SL';
         log.warn({ pair: pos.pair, zScore, slZ: config.stopLossZScore }, 'Stop loss triggered');
+      } else if (config.trailingStopEnabled && config.trailingStopZ > 0) {
+        const absZ = Math.abs(zScore);
+        let bestZ = absZ;
+        try {
+          const meta = pos.metadata ? JSON.parse(pos.metadata) : {};
+          bestZ = Math.min(meta.trailingBestZ ?? absZ, absZ);
+        } catch { /* use absZ */ }
+        if (absZ >= bestZ + config.trailingStopZ) {
+          action = 'EXIT_TRAILING';
+          log.info({ pair: pos.pair, zScore, bestZ, trailZ: config.trailingStopZ }, 'Trailing stop triggered');
+        }
+        const meta = pos.metadata ? JSON.parse(pos.metadata) : {};
+        metadata = JSON.stringify({ ...meta, trailingBestZ: bestZ });
+      }
+
+      if (metadata && action === 'HOLD') {
+        queries.updatePositionState(pos.id, pos.state, { metadata });
       }
 
       updates.push({

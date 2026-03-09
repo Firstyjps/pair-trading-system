@@ -19,6 +19,13 @@ const TradingConfigSchema = z.object({
 
   // Risk
   autoTradingEnabled: z.boolean().default(true),
+  lossAlertThresholdUsd: z.number().min(0).default(50),
+  lossAlertThresholdPct: z.number().min(0).max(100).default(10),
+  circuitBreakerLosses: z.number().int().min(0).default(3),
+  circuitBreakerCooldownMs: z.number().int().min(0).default(3600000),
+  trailingStopEnabled: z.boolean().default(false),
+  trailingStopZ: z.number().positive().default(1.5),
+  partialTPPercent: z.number().min(0).max(100).default(0),
   maxLeverage: z.number().int().min(1).max(20).default(5).refine(v => v <= 20, {
     message: 'Hard cap: max leverage is 20x',
   }),
@@ -31,6 +38,10 @@ const TradingConfigSchema = z.object({
   reconciliationIntervalMs: z.number().int().positive().default(300000),
   scanIntervalMs: z.number().int().positive().default(3600000),
   pnlReportIntervalMs: z.number().int().min(0).default(300000), // 0 = disabled
+  weeklySummaryCron: z.string().default('0 9 * * 1'),
+  monthlySummaryCron: z.string().default('0 9 1 * *'),
+  webhookUrl: z.string().optional(),
+  dbBackupPath: z.string().default('./data/backups'),
 
   // Dedup
   signalDedup: z.boolean().default(true),
