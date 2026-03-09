@@ -43,6 +43,14 @@ const TradingConfigSchema = z.object({
   webhookUrl: z.string().optional(),
   dbBackupPath: z.string().default('./data/backups'),
 
+  // Smart entry/exit
+  /** Minimum bars to hold before allowing TP exit (prevent instant close) */
+  minHoldBarsTP: z.number().int().min(0).default(3),
+  /** Minimum expected profit as multiple of fees before entering (e.g. 2.0 = need 2x fees profit) */
+  minProfitMultiplier: z.number().min(0).default(2.0),
+  /** Fee rate per side (entry + exit = 2x this) */
+  feeRate: z.number().min(0).default(0.0006),
+
   // Dedup
   signalDedup: z.boolean().default(true),
   notificationTTL: z.number().int().positive().default(300000),

@@ -72,12 +72,13 @@ export function generateSignals(
   const signals: SignalCandidate[] = [];
 
   for (const pair of pairs) {
-    const { zScore, spread } = calculateZScore(
+    const { zScore, spread, std } = calculateZScore(
       pair.pricesA,
       pair.pricesB,
       pair.coint.beta,
     );
 
+    const absZ = Math.abs(zScore);
     let direction: Direction | null = null;
 
     // SHORT_SPREAD: Z > +entryZ → sell A, buy B (spread too high, expect reversion)
@@ -90,6 +91,33 @@ export function generateSignals(
     }
 
     if (direction) {
+      // Safe zone check: reject if Z is too close to (or beyond) stop loss
+      const safeLimit = config.stopLossZScore - (config.safeZoneBuffer ?? 0.5);
+      if (absZ >= safeLimit) {
+        log.info({
+          pair: `${pair.symbolA}/${pair.symbolB}`,
+          zScore: zScore.toFixed(4),
+          safeLimit: safeLimit.toFixed(2),
+        }, 'Signal rejected — Z-Score beyond safe zone');
+        continue;
+      }
+
+      // Min profit check: expected reversion must cover fees
+      // Expected profit ≈ (|Z| - exitZ) * std; Fees ≈ 2 * feeRate * capital
+      const feeRate = config.feeRate ?? 0.0006;
+      const minProfitMult = config.minProfitMultiplier ?? 2.0;
+      const expectedReversionZ = absZ - config.exitZScore;
+      const feeCostZ = feeRate * 2 * minProfitMult * (1 / (std > 0 ? std : 1));
+      if (expectedReversionZ > 0 && std > 0 && expectedReversionZ * std < feeRate * 2 * minProfitMult) {
+        log.info({
+          pair: `${pair.symbolA}/${pair.symbolB}`,
+          zScore: zScore.toFixed(4),
+          expectedReversionZ: expectedReversionZ.toFixed(4),
+          std: std.toFixed(6),
+        }, 'Signal rejected — expected profit too small to cover fees');
+        continue;
+      }
+
       signals.push({
         symbolA: pair.symbolA,
         symbolB: pair.symbolB,

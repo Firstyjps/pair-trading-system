@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { calculateZScore, generateSignals, persistSignals } from '../../src/scanner/signal-generator.js';
 import { TradingQueries } from '../../src/db/queries.js';
 import { initializeDatabase } from '../../src/db/schema.js';
-import { resetConfigForTesting, loadTradingConfig } from '../../src/config.js';
+import { resetConfigForTesting, loadTradingConfig, updateTradingConfig } from '../../src/config.js';
 import type Database from 'better-sqlite3';
 import { v4 as uuid } from 'uuid';
 import path from 'path';
@@ -63,6 +63,9 @@ describe('generateSignals', () => {
   });
 
   it('should generate SHORT_SPREAD when Z > entry', () => {
+    // Raise stopLossZScore so the extreme Z doesn't hit the safe zone filter
+    updateTradingConfig({ stopLossZScore: 100 });
+
     const n = 200;
     const pricesA = Array.from({ length: n }, () => 100);
     const pricesB = Array.from({ length: n }, () => 100);

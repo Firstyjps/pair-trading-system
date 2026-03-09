@@ -253,7 +253,7 @@ function runCointegrationStage(
   priceData: Map<string, number[]>,
   config: AutoSelectConfig,
 ): PairCandidate[] {
-  const passing: PairCandidate[] = [];
+  const enriched: PairCandidate[] = [];
 
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
@@ -272,37 +272,38 @@ function runCointegrationStage(
         config.cointegrationPValue,
       );
 
-      // Soft filter: accept pairs with finite half-life in range
-      // Cointegration p-value is used for ranking, not hard gating
-      // (crypto pairs are often correlated but not strictly cointegrated;
-      //  the quick backtest stage will filter out non-profitable pairs)
-      const halfLifeOk = result.halfLife >= config.halfLifeRange[0] &&
-                          result.halfLife <= config.halfLifeRange[1];
-
-      if (halfLifeOk) {
-        passing.push({
-          ...c,
-          stage: 'cointegration',
-          cointegration: {
-            beta: result.beta,
-            pValue: result.pValue,
-            halfLife: result.halfLife,
-          },
-        });
-      }
+      // Enrichment stage: compute cointegration stats for ALL correlated pairs.
+      // Crypto pairs are often highly correlated but not strictly cointegrated
+      // (ADF test fails, half-life = Infinity). Instead of filtering them out,
+      // pass all to quick backtest and let profitability be the real gate.
+      // Cointegration stats are used for ranking, not hard gating.
+      enriched.push({
+        ...c,
+        stage: 'cointegration',
+        cointegration: {
+          beta: result.beta,
+          pValue: result.pValue,
+          halfLife: isFinite(result.halfLife) ? result.halfLife : 999,
+        },
+      });
     } catch {
-      // Skip pairs that fail cointegration test
+      // Still include pairs that fail cointegration test with default stats
+      enriched.push({
+        ...c,
+        stage: 'cointegration',
+        cointegration: { beta: 1, pValue: 0.99, halfLife: 999 },
+      });
     }
   }
 
   console.log(''); // newline after progress
   // Sort by pValue ascending (best cointegration first), then halfLife
-  passing.sort((a, b) => {
+  enriched.sort((a, b) => {
     const pDiff = (a.cointegration?.pValue ?? 1) - (b.cointegration?.pValue ?? 1);
     if (Math.abs(pDiff) > 0.01) return pDiff;
     return (a.cointegration?.halfLife ?? Infinity) - (b.cointegration?.halfLife ?? Infinity);
   });
-  return passing;
+  return enriched;
 }
 
 // ─── Stage 5: Quick Backtest ───
@@ -725,21 +726,14 @@ async function runAutoSelect(config: AutoSelectConfig): Promise<AutoSelectResult
     });
   }
 
-  // ── Stage 4: Cointegration ──
-  console.log('━━━ Stage 4/7: Cointegration Filter ━━━');
+  // ── Stage 4: Cointegration Enrichment ──
+  console.log('━━━ Stage 4/7: Cointegration Analysis ━━━');
   const t4 = Date.now();
   const cointegrated = runCointegrationStage(correlated, priceData, config);
   const t4e = (Date.now() - t4) / 1000;
-  console.log(`  ✅ ${cointegrated.length} cointegrated pairs (${t4e.toFixed(1)}s)`);
+  const strictCoint = cointegrated.filter(c => (c.cointegration?.pValue ?? 1) <= config.cointegrationPValue);
+  console.log(`  ✅ ${cointegrated.length} pairs analyzed (${strictCoint.length} strictly cointegrated) (${t4e.toFixed(1)}s)`);
   console.log('');
-
-  if (cointegrated.length === 0) {
-    console.log('  ⚠️  No cointegrated pairs found. Try raising --cointegration threshold or lowering --correlation.');
-    return buildEarlyExitResult(config, coins, priceData.size, totalPossiblePairs, {
-      correlation: { totalInput: priceData.size, totalPairs: totalPossiblePairs, passing: correlated.length, elapsed: t3e },
-      cointegration: { totalInput: correlated.length, passing: 0, elapsed: t4e },
-    });
-  }
 
   // ── Stage 5: Quick Backtest ──
   console.log('━━━ Stage 5/7: Quick Backtest Screening ━━━');

@@ -18,6 +18,8 @@ import { reconcile } from './monitor/reconciliation.js';
 import { detectOrphans } from './monitor/orphan-detector.js';
 import { dollarNeutral } from './sizing/dollar-neutral.js';
 import { buildPnLReport } from './telegram/pnl-report.js';
+import { runBacktest, type BacktestConfig } from './backtest/engine.js';
+import { formatReport } from './backtest/report.js';
 import type { Direction, OHLCVCandle } from './types.js';
 import type { CointegrationResult } from './scanner/cointegration.js';
 import {
@@ -124,6 +126,43 @@ async function main() {
       },
       onClosePair: async (pair: string) => {
         return await manualClosePair(pair);
+      },
+      onBacktest: async (pair: string, days: number) => {
+        const config = getTradingConfig();
+        const [symA, symB] = pair.split('/');
+        if (!symA || !symB) return 'Usage: /backtest PEPE/SHIB 30';
+        const symbolA = `${symA}-USDT-SWAP`;
+        const symbolB = `${symB}-USDT-SWAP`;
+        const lookbackBars = Math.min(days * 24, 1000);
+        try {
+          const [candlesA, candlesB] = await Promise.all([
+            dataFetcher.fetchOHLCV(symbolA, '1h', lookbackBars),
+            dataFetcher.fetchOHLCV(symbolB, '1h', lookbackBars),
+          ]);
+          if (candlesA.length < 50 || candlesB.length < 50) {
+            return `ข้อมูลไม่พอ: ${symA} ${candlesA.length} แท่ง, ${symB} ${candlesB.length} แท่ง (ต้องการอย่างน้อย 50)`;
+          }
+          const pricesA = candlesA.map(c => c.close);
+          const pricesB = candlesB.map(c => c.close);
+          const btConfig: BacktestConfig = {
+            entryZ: config.entryZScore,
+            exitZ: config.exitZScore,
+            stopLossZ: config.stopLossZScore,
+            halfLifeFilter: Math.min(config.lookbackPeriods, 200),
+            correlationFilter: config.correlationThreshold,
+            safeZoneBuffer: config.safeZoneBuffer,
+            gracePeriodBars: 5,
+            cooldownBars: 24,
+            capitalPerLeg: config.maxCapitalPerPair,
+            leverage: config.maxLeverage,
+            feeRate: 0.0006,
+          };
+          const report = runBacktest(pricesA, pricesB, pair, btConfig);
+          const text = formatReport(report);
+          return text.length > 4000 ? text.slice(0, 3997) + '...' : text;
+        } catch (err: any) {
+          return `Backtest error: ${err.message}`;
+        }
       },
       onPnlReport: async () => {
         const [exchangePositions, balance, pairPositions] = await Promise.all([
@@ -486,6 +525,34 @@ async function main() {
         exchangeAdapter.fetchTicker(instrumentA),
         exchangeAdapter.fetchTicker(instrumentB),
       ]);
+
+      // ── Pre-trade Z-Score re-check ──
+      // Re-calculate Z from live prices to prevent stale-signal entries
+      const cachedPricesA = priceCache.get(symbolA);
+      const cachedPricesB = priceCache.get(symbolB);
+      const beta = betaCache.get(pair) ?? 1;
+
+      if (cachedPricesA && cachedPricesB && cachedPricesA.length > 20) {
+        const livePricesA = [...cachedPricesA, tickerA.last];
+        const livePricesB = [...cachedPricesB, tickerB.last];
+        const { zScore: liveZ } = calculateZScore(livePricesA, livePricesB, beta);
+        const absLiveZ = Math.abs(liveZ);
+        const safeLimit = config.stopLossZScore - (config.safeZoneBuffer ?? 0.5);
+
+        // Reject if Z has moved outside safe zone
+        if (absLiveZ >= safeLimit) {
+          logger.warn({ pair, signalZ: zScore, liveZ, safeLimit }, 'Pre-trade check FAILED — Z beyond safe zone, skipping');
+          return;
+        }
+
+        // Reject if Z has reverted below entry threshold (signal is stale)
+        if (absLiveZ < config.entryZScore) {
+          logger.info({ pair, signalZ: zScore, liveZ, entryZ: config.entryZScore }, 'Pre-trade check FAILED — Z reverted below entry, signal stale');
+          return;
+        }
+
+        logger.info({ pair, signalZ: zScore, liveZ: liveZ.toFixed(4) }, 'Pre-trade Z re-check passed');
+      }
 
       // Dollar-neutral sizing (use contract sizes from exchange)
       const ctSizeA = contractSizeCache.get(symbolA) ?? 1;

@@ -66,9 +66,23 @@ export async function checkSpreads(
       let action: SpreadUpdate['action'] = 'HOLD';
       let metadata = pos.metadata;
 
+      // Minimum hold time: convert bars to ms (1 bar = 1h or 4h based on timeframe)
+      const minHoldBars = config.minHoldBarsTP ?? 3;
+      const barMs = config.primaryTimeframe === '4h' ? 4 * 3600_000 : 3600_000;
+      const minHoldMs = minHoldBars * barMs;
+      const positionAge = Date.now() - new Date(pos.opened_at).getTime();
+
       if (shouldTriggerTakeProfit(zScore, config.exitZScore)) {
-        action = 'EXIT_TP';
-        log.info({ pair: pos.pair, zScore, exitZ: config.exitZScore }, 'Take profit triggered');
+        if (positionAge >= minHoldMs) {
+          action = 'EXIT_TP';
+          log.info({ pair: pos.pair, zScore, exitZ: config.exitZScore }, 'Take profit triggered');
+        } else {
+          log.info({
+            pair: pos.pair, zScore,
+            holdMin: Math.floor(positionAge / 60000),
+            requiredMin: Math.floor(minHoldMs / 60000),
+          }, 'TP conditions met but minimum hold time not reached — holding');
+        }
       } else if (shouldTriggerStopLoss(pos.opened_at, zScore, config.stopLossZScore, config.gracePeriodMs)) {
         action = 'EXIT_SL';
         log.warn({ pair: pos.pair, zScore, slZ: config.stopLossZScore }, 'Stop loss triggered');
