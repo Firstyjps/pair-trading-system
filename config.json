@@ -15,7 +15,6 @@
   "reconciliationIntervalMs": 300000,
   "scanIntervalMs": 3600000,
   "pnlReportIntervalMs": 300000,
-  "pnlReportIntervalMs": 300000,
   "signalDedup": true,
   "notificationTTL": 300000,
   "sizingMethod": "dollar-neutral",
