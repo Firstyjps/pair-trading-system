@@ -491,12 +491,6 @@ async function main() {
       logger.info({ pair, signalId }, 'Auto-trading disabled in config — skipping order placement');
       return;
     }
-    // Circuit breaker: หยุดเปิด position หลังขาดทุนติดกัน X ครั้ง
-    const consecutiveLosses = queries.getConsecutiveLosses();
-    if (consecutiveLosses >= (config.circuitBreakerLosses ?? 3)) {
-      logger.warn({ consecutiveLosses, threshold: config.circuitBreakerLosses }, 'Circuit breaker active — skipping new positions');
-      return;
-    }
     const [symbolA, symbolB] = pair.split('/');
     const instrumentA = `${symbolA}-USDT-SWAP`;
     const instrumentB = `${symbolB}-USDT-SWAP`;
@@ -537,13 +531,6 @@ async function main() {
         const livePricesB = [...cachedPricesB, tickerB.last];
         const { zScore: liveZ } = calculateZScore(livePricesA, livePricesB, beta);
         const absLiveZ = Math.abs(liveZ);
-        const safeLimit = config.stopLossZScore - (config.safeZoneBuffer ?? 0.5);
-
-        // Reject if Z has moved outside safe zone
-        if (absLiveZ >= safeLimit) {
-          logger.warn({ pair, signalZ: zScore, liveZ, safeLimit }, 'Pre-trade check FAILED — Z beyond safe zone, skipping');
-          return;
-        }
 
         // Reject if Z has reverted below entry threshold (signal is stale)
         if (absLiveZ < config.entryZScore) {
@@ -653,6 +640,32 @@ async function main() {
       return `Position ${pair} closed successfully`;
     }
     return `Failed to close ${pair}: ${result.error}`;
+  }
+
+  // ═══ 2b. Embedded Web Dashboard ═══
+  {
+    const express = (await import('express')).default;
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+    const { createApiRouter } = await import('./web/routes/api.js');
+
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const webPort = parseInt(process.env.WEB_PORT ?? '3000', 10);
+
+    const app = express();
+    app.use(express.json());
+    app.use(express.static(path.join(__dirname, 'web', 'public')));
+    app.use('/api', createApiRouter(queries, exchangeAdapter, {
+      onOpenPair: (pair) => manualOpenPair(pair),
+      onClosePair: (pair) => manualClosePair(pair),
+    }));
+    app.get('/{*splat}', (_req: any, res: any) => {
+      res.sendFile(path.join(__dirname, 'web', 'public', 'index.html'));
+    });
+    app.listen(webPort, () => {
+      logger.info({ port: webPort }, 'Web dashboard running');
+    });
   }
 
   // ═══ 3. Start Scanner Scheduler ═══

@@ -142,9 +142,9 @@ export function loadTradingConfig(configPath?: string): TradingConfig {
   }
 
   // Hard enforce leverage cap
-  if (result.data.maxLeverage > 20) {
-    log.warn({ requested: result.data.maxLeverage }, 'Leverage exceeds hard cap of 20x, clamping');
-    result.data.maxLeverage = 20;
+  if (result.data.maxLeverage > 10) {
+    log.warn({ requested: result.data.maxLeverage }, 'Leverage exceeds hard cap of 10x, clamping');
+    result.data.maxLeverage = 10;
   }
 
   // Validate entry/SL relationship
@@ -218,9 +218,9 @@ function _applyTradingConfig(rawConfig: Record<string, unknown>): TradingConfig 
     throw new Error(`Invalid trading config:\n${errors.join('\n')}`);
   }
 
-  if (result.data.maxLeverage > 20) {
-    log.warn({ requested: result.data.maxLeverage }, 'Leverage exceeds hard cap of 20x, clamping');
-    result.data.maxLeverage = 20;
+  if (result.data.maxLeverage > 10) {
+    log.warn({ requested: result.data.maxLeverage }, 'Leverage exceeds hard cap of 10x, clamping');
+    result.data.maxLeverage = 10;
   }
 
   if (result.data.entryZScore + result.data.safeZoneBuffer >= result.data.stopLossZScore) {

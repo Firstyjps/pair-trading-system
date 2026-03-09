@@ -50,11 +50,8 @@ export async function executePairTrade(
     return { success: false, error: `Validation failed: ${validation.failures.join('; ')}` };
   }
 
-  // Step 2: Safe entry zone check
-  if (!isInSafeEntryZone(zScore, config.entryZScore, config.stopLossZScore, config.safeZoneBuffer)) {
-    log.warn({ zScore, entryZ: config.entryZScore, slZ: config.stopLossZScore }, 'Not in safe entry zone');
-    return { success: false, error: 'Not in safe entry zone — too close to stop loss' };
-  }
+  // Step 2: Entry allowed if Z is beyond entry threshold (no safe zone block)
+  // Stop-loss only applies AFTER entering a position via spread-monitor.
 
   // Step 3: Create position in DB as PENDING
   const pair = `${legA.instrument.replace('-USDT-SWAP', '')}/${legB.instrument.replace('-USDT-SWAP', '')}`;

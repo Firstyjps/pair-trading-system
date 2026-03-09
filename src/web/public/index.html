@@ -167,7 +167,15 @@
     <!-- Correlation Heatmap -->
     <div class="heatmap-section">
       <div class="panel-header">CORRELATION MATRIX</div>
-      <div class="heatmap-wrap"><canvas id="heatmap-canvas"></canvas></div>
+      <div class="heatmap-wrap">
+        <canvas id="heatmap-canvas"></canvas>
+        <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
+      </div>
+      <div class="heatmap-legend">
+        <span class="heatmap-legend-label">-1.0</span>
+        <div class="heatmap-legend-bar"></div>
+        <span class="heatmap-legend-label">+1.0</span>
+      </div>
     </div>
   </section>
 

@@ -144,10 +144,10 @@ describe('validatePairTrade', () => {
     expect(result.failures.some(f => f.includes('same side'))).toBe(true);
   });
 
-  it('should reject leverage > 5x hard cap', () => {
+  it('should reject leverage > 10x hard cap', () => {
     const result = validatePairTrade(
-      { ...legA, leverage: 6 },
-      { ...legB, leverage: 6 },
+      { ...legA, leverage: 11 },
+      { ...legB, leverage: 11 },
     );
     expect(result.valid).toBe(false);
     expect(result.failures.some(f => f.includes('hard cap'))).toBe(true);

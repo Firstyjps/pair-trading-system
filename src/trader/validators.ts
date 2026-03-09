@@ -72,8 +72,8 @@ export function validatePairTrade(
     failures.push('Both legs have the same side — not a pair trade');
   }
 
-  // Leverage hard cap (5x for pair trades)
-  const leverageCap = 5;
+  // Leverage hard cap
+  const leverageCap = 10;
   if (legA.leverage > leverageCap) {
     failures.push(`Leg A leverage ${legA.leverage} exceeds hard cap of ${leverageCap}x`);
   }

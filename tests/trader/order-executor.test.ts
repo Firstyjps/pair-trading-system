@@ -104,15 +104,16 @@ describe('executePairTrade', () => {
     expect(positions.length).toBe(0); // ERROR positions are filtered out
   });
 
-  it('should reject trade outside safe entry zone', async () => {
+  it('should accept trade at any Z (safe zone checked upstream in signal-generator)', async () => {
+    // Safe zone is now enforced in signal-generator and pre-trade re-check,
+    // not in executePairTrade itself
     const exchange = createMockExchange();
     const result = await executePairTrade(
       exchange, queries, legA, legB,
-      'SHORT_SPREAD', 3.6, 0.15, uuid(), uuid(), // Z=3.6, too close to SL=3.0
+      'SHORT_SPREAD', 3.6, 0.15, uuid(), uuid(),
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('safe entry zone');
+    expect(result.success).toBe(true);
   });
 
   it('should reject invalid orders (Infinity size)', async () => {

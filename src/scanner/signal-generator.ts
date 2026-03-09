@@ -91,16 +91,8 @@ export function generateSignals(
     }
 
     if (direction) {
-      // Safe zone check: reject if Z is too close to (or beyond) stop loss
-      const safeLimit = config.stopLossZScore - (config.safeZoneBuffer ?? 0.5);
-      if (absZ >= safeLimit) {
-        log.info({
-          pair: `${pair.symbolA}/${pair.symbolB}`,
-          zScore: zScore.toFixed(4),
-          safeLimit: safeLimit.toFixed(2),
-        }, 'Signal rejected — Z-Score beyond safe zone');
-        continue;
-      }
+      // Note: No safe zone block here — if Z exceeds entry threshold,
+      // the signal is valid. Stop-loss only applies AFTER entering a position.
 
       // Min profit check: expected reversion must cover fees
       // Expected profit ≈ (|Z| - exitZ) * std; Fees ≈ 2 * feeRate * capital

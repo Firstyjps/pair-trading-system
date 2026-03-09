@@ -178,7 +178,12 @@ function shortSymbol(sym: string): string {
     .replace(':USDT', '');
 }
 
-export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter | null): Router {
+export interface ApiCallbacks {
+  onOpenPair?: (pair: string) => Promise<string>;
+  onClosePair?: (pair: string) => Promise<string>;
+}
+
+export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter | null, callbacks?: ApiCallbacks): Router {
   const router = Router();
 
   // ─── Rate Limiting Middleware ───
@@ -1120,6 +1125,42 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
       });
     } catch (err) {
       log.error({ error: err }, 'Error in /account/reconcile');
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ─── Manual Trade: Open Pair ───
+  router.post('/trade/open', async (req: Request, res: Response) => {
+    const { pair } = req.body;
+    if (!pair || typeof pair !== 'string' || !/^[A-Z0-9]+\/[A-Z0-9]+$/.test(pair)) {
+      return res.status(400).json({ error: 'Invalid pair format. Use "BASE_A/BASE_B"' });
+    }
+    if (!callbacks?.onOpenPair) {
+      return res.status(503).json({ error: 'Trade execution not available (dashboard-only mode)' });
+    }
+    try {
+      const result = await callbacks.onOpenPair(pair);
+      res.json({ success: true, message: result });
+    } catch (err) {
+      log.error({ pair, error: err }, 'Error opening pair');
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ─── Manual Trade: Close Pair ───
+  router.post('/trade/close', async (req: Request, res: Response) => {
+    const { pair } = req.body;
+    if (!pair || typeof pair !== 'string' || !/^[A-Z0-9]+\/[A-Z0-9]+$/.test(pair)) {
+      return res.status(400).json({ error: 'Invalid pair format. Use "BASE_A/BASE_B"' });
+    }
+    if (!callbacks?.onClosePair) {
+      return res.status(503).json({ error: 'Trade execution not available (dashboard-only mode)' });
+    }
+    try {
+      const result = await callbacks.onClosePair(pair);
+      res.json({ success: true, message: result });
+    } catch (err) {
+      log.error({ pair, error: err }, 'Error closing pair');
       res.status(500).json({ error: String(err) });
     }
   });

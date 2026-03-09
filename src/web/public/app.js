@@ -429,7 +429,10 @@ function renderOrderInstruction(p) {
       return '<span class="order-monitor">MONITORING</span>';
   }
 
-  let html = `<span class="order-badge ${badgeClass}">${label}</span>`;
+  // OPEN_PAIR and CLOSE_TP/CLOSE_SL are clickable action buttons
+  const isClickable = instr === 'OPEN_PAIR' || instr === 'CLOSE_TP' || instr === 'CLOSE_SL';
+  const clickAttr = isClickable ? ` onclick="handleTradeAction('${p.pair}', '${instr}')" style="cursor:pointer"` : '';
+  let html = `<span class="order-badge ${badgeClass}"${clickAttr}>${label}</span>`;
   if (legA && legB) {
     html += `<div class="leg-detail"><span class="leg-a">A: ${legA}</span> &nbsp; <span class="leg-b">B: ${legB}</span></div>`;
   } else if (instr === 'CLOSE_SL') {
@@ -438,6 +441,33 @@ function renderOrderInstruction(p) {
     html += `<div class="leg-detail" style="color:var(--neon-cyan)">TP REACHED</div>`;
   }
   return html;
+}
+
+// ─── Manual Trade Action ───
+async function handleTradeAction(pair, instruction) {
+  const action = instruction === 'OPEN_PAIR' ? 'open' : 'close';
+  const confirmMsg = action === 'open'
+    ? `Open position for ${pair}?`
+    : `Close position for ${pair}?`;
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const res = await fetch(`/api/trade/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pair }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(data.message);
+      refreshCurrentPage();
+    } else {
+      alert('Error: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Request failed: ' + err.message);
+  }
 }
 
 // ─── Scanner Trade History ───
@@ -547,63 +577,218 @@ function refreshScanner() {
 //  HEATMAP
 // ═══════════════════════════════════════════════
 
+let _hmState = null;
+let _hmCache = null; // off-screen canvas cache
+
 function renderHeatmap(hm) {
   const canvas = $('#heatmap-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
+  const tooltip = $('#heatmap-tooltip');
 
   const n = hm.symbols.length;
-  const cellSize = Math.min(Math.floor(550 / n), 42);
-  const pad = 65;
-  canvas.width = n * cellSize + pad + 10;
-  canvas.height = n * cellSize + pad + 10;
+  // Fit all cells in view — min 8px, shrink to fit without scrolling
+  const maxGridWidth = Math.min(window.innerWidth - 160, 900);
+  const cellSize = Math.max(8, Math.min(Math.floor(maxGridWidth / n), 18));
+  const pad = 70;
+  const w = n * cellSize + pad + 20;
+  const h = n * cellSize + pad + 20;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  ctx.scale(dpr, dpr);
+
+  _hmState = { hm, cellSize, pad, n, w, h };
+
+  _drawHeatmapBase(ctx, _hmState, -1, -1);
+
+  // Cache the base render for fast highlight
+  _hmCache = document.createElement('canvas');
+  _hmCache.width = canvas.width;
+  _hmCache.height = canvas.height;
+  _hmCache.getContext('2d').drawImage(canvas, 0, 0);
+
+  // Tooltip + highlight on hover
+  let lastRow = -1, lastCol = -1;
+  canvas.onmousemove = (e) => {
+    if (!_hmState) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const col = Math.floor((mx - pad) / cellSize);
+    const row = Math.floor((my - pad) / cellSize);
+
+    if (col >= 0 && col < n && row >= 0 && row < n) {
+      if (row === lastRow && col === lastCol) {
+        // Just move tooltip
+        tooltip.style.left = (e.clientX + 14) + 'px';
+        tooltip.style.top = (e.clientY - 10) + 'px';
+        return;
+      }
+      lastRow = row; lastCol = col;
+
+      const v = hm.matrix[row][col];
+      const symA = hm.symbols[row];
+      const symB = hm.symbols[col];
+      const color = v >= 0.75 ? '#00ff88' : v >= 0.5 ? '#4dffb4' : v >= 0.3 ? '#00d4ff' : v >= 0 ? '#8892a4' : v >= -0.3 ? '#ffaa44' : '#ff4444';
+      tooltip.innerHTML = `<div class="ht-pair">${symA} / ${symB}</div><div class="ht-val" style="color:${color}">${v >= 0 ? '+' : ''}${v.toFixed(3)}</div>`;
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY - 10) + 'px';
+
+      // Restore base, then draw highlight
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(_hmCache, 0, 0);
+      ctx.scale(dpr, dpr);
+      _drawHighlight(ctx, _hmState, row, col);
+    } else {
+      if (lastRow !== -1) {
+        lastRow = -1; lastCol = -1;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(_hmCache, 0, 0);
+        ctx.scale(dpr, dpr);
+      }
+      tooltip.style.display = 'none';
+    }
+  };
+
+  canvas.onmouseleave = () => {
+    lastRow = -1; lastCol = -1;
+    if (tooltip) tooltip.style.display = 'none';
+    if (_hmCache) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(_hmCache, 0, 0);
+      ctx.scale(dpr, dpr);
+    }
+  };
+}
+
+function _drawHeatmapBase(ctx, st, hlRow, hlCol) {
+  const { hm, cellSize, pad, n, w, h } = st;
 
   // Background
   ctx.fillStyle = '#0a0e17';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, w, h);
+
+  // Alternating row stripes for readability
+  for (let i = 0; i < n; i++) {
+    if (i % 2 === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,.015)';
+      ctx.fillRect(pad, pad + i * cellSize, n * cellSize, cellSize);
+    }
+  }
 
   // Draw cells
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
       const v = hm.matrix[i][j];
-      ctx.fillStyle = corrColor(v);
-      ctx.fillRect(pad + j * cellSize, pad + i * cellSize, cellSize - 1, cellSize - 1);
+      const x = pad + j * cellSize;
+      const y = pad + i * cellSize;
 
-      if (cellSize > 22) {
-        ctx.fillStyle = Math.abs(v) > 0.5 ? '#e8edf5' : '#5a6577';
-        ctx.font = `${Math.min(9, cellSize / 3.5)}px 'JetBrains Mono', monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(v.toFixed(2), pad + j * cellSize + cellSize / 2, pad + i * cellSize + cellSize / 2);
+      if (i === j) {
+        // Diagonal — subtle marker
+        ctx.fillStyle = 'rgba(0,212,255,.12)';
+      } else {
+        ctx.fillStyle = corrColor(v);
       }
+      ctx.fillRect(x + 0.5, y + 0.5, cellSize - 1, cellSize - 1);
     }
   }
 
-  // Labels
-  ctx.fillStyle = '#5a6577';
-  ctx.font = "9px 'JetBrains Mono', monospace";
-  for (let i = 0; i < n; i++) {
-    ctx.save();
-    ctx.translate(pad + i * cellSize + cellSize / 2, pad - 5);
-    ctx.rotate(-Math.PI / 4);
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(hm.symbols[i], 0, 0);
-    ctx.restore();
+  // Grid lines every 5 rows/cols for easier counting
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 0.5;
+  for (let i = 5; i < n; i += 5) {
+    ctx.beginPath();
+    ctx.moveTo(pad + i * cellSize, pad);
+    ctx.lineTo(pad + i * cellSize, pad + n * cellSize);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pad, pad + i * cellSize);
+    ctx.lineTo(pad + n * cellSize, pad + i * cellSize);
+    ctx.stroke();
+  }
 
+  // Labels — Y axis
+  const fontSize = 10;
+  ctx.font = `${fontSize}px 'JetBrains Mono', monospace`;
+  for (let i = 0; i < n; i++) {
+    ctx.fillStyle = (i % 2 === 0) ? '#a0aab8' : '#6b7685';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     ctx.fillText(hm.symbols[i], pad - 5, pad + i * cellSize + cellSize / 2);
   }
+
+  // Labels — X axis (top, rotated)
+  for (let i = 0; i < n; i++) {
+    ctx.save();
+    ctx.translate(pad + i * cellSize + cellSize / 2, pad - 4);
+    ctx.rotate(-Math.PI / 3);
+    ctx.fillStyle = (i % 2 === 0) ? '#a0aab8' : '#6b7685';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${fontSize}px 'JetBrains Mono', monospace`;
+    ctx.fillText(hm.symbols[i], 0, 0);
+    ctx.restore();
+  }
+}
+
+function _drawHighlight(ctx, st, row, col) {
+  const { pad, cellSize, n, hm } = st;
+
+  // Semi-transparent overlay
+  ctx.fillStyle = 'rgba(10,14,23,.5)';
+  ctx.fillRect(pad, pad, n * cellSize, n * cellSize);
+
+  // Redraw cross (row + col) brighter
+  for (let j = 0; j < n; j++) {
+    const v = hm.matrix[row][j];
+    ctx.fillStyle = corrColor(v);
+    ctx.fillRect(pad + j * cellSize + 0.5, pad + row * cellSize + 0.5, cellSize - 1, cellSize - 1);
+  }
+  for (let i = 0; i < n; i++) {
+    if (i === row) continue;
+    const v = hm.matrix[i][col];
+    ctx.fillStyle = corrColor(v);
+    ctx.fillRect(pad + col * cellSize + 0.5, pad + i * cellSize + 0.5, cellSize - 1, cellSize - 1);
+  }
+
+  // Active cell — bright cyan border
+  ctx.strokeStyle = '#00d4ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pad + col * cellSize, pad + row * cellSize, cellSize, cellSize);
+
+  // Row/col label highlight
+  ctx.fillStyle = '#00d4ff';
+  ctx.font = "bold 10px 'JetBrains Mono', monospace";
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(hm.symbols[row], pad - 5, pad + row * cellSize + cellSize / 2);
+  ctx.save();
+  ctx.translate(pad + col * cellSize + cellSize / 2, pad - 4);
+  ctx.rotate(-Math.PI / 3);
+  ctx.textAlign = 'left';
+  ctx.fillText(hm.symbols[col], 0, 0);
+  ctx.restore();
 }
 
 function corrColor(v) {
-  if (v >= 0.8) return 'rgba(0,255,136,.55)';
-  if (v >= 0.6) return 'rgba(0,255,136,.3)';
-  if (v >= 0.3) return 'rgba(0,212,255,.15)';
-  if (v >= 0) return 'rgba(30,42,58,.5)';
-  if (v >= -0.3) return 'rgba(255,68,68,.15)';
-  return 'rgba(255,68,68,.4)';
+  // Bold, opaque colors for clear readability
+  if (v >= 0.9)  return '#00ff88';
+  if (v >= 0.75) return '#00dd77';
+  if (v >= 0.6)  return '#00bb66';
+  if (v >= 0.5)  return '#009955';
+  if (v >= 0.3)  return '#1a6b5a';
+  if (v >= 0.1)  return '#1a3a40';
+  if (v >= -0.1) return '#1e2a3a';
+  if (v >= -0.3) return '#3a2a1a';
+  if (v >= -0.5) return '#6b3a1a';
+  if (v >= -0.6) return '#993322';
+  if (v >= -0.75)return '#bb3322';
+  return '#ff4444';
 }
 
 // ═══════════════════════════════════════════════
