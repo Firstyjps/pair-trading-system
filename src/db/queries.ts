@@ -191,6 +191,12 @@ export class TradingQueries {
     ).all(pair, limit) as ZScoreRecord[];
   }
 
+  getLatestZScoreForPair(pair: string): { z_score: number; spread: number } | undefined {
+    return this.db.prepare(
+      'SELECT z_score, spread FROM z_score_history WHERE pair = ? ORDER BY timestamp DESC LIMIT 1'
+    ).get(pair) as { z_score: number; spread: number } | undefined;
+  }
+
   // ─── Notification Queries ───
 
   insertNotification(notification: NotificationRecord): void {

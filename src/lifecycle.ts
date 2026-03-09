@@ -11,6 +11,7 @@ interface SystemInstances {
   reconciliation: ReturnType<typeof setInterval> | null;
   spreadMonitor: ReturnType<typeof setInterval> | null;
   scannerInterval: ReturnType<typeof setInterval> | null;
+  pnlReport: ReturnType<typeof setInterval> | null;
   startupTime: number;
 }
 
@@ -24,6 +25,7 @@ function getGlobal(): SystemInstances {
       reconciliation: null,
       spreadMonitor: null,
       scannerInterval: null,
+      pnlReport: null,
       startupTime: Date.now(),
     };
   }

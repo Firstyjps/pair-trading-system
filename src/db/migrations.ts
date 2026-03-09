@@ -24,6 +24,12 @@ const migrations: Migration[] = [
   // },
 ];
 
+/**
+ * Run pending database migrations.
+ *
+ * IMPORTANT: Back up the database file (e.g. `cp data/trading.db data/trading.db.bak`)
+ * before running migrations or deploying a new version.
+ */
 export function runMigrations(db: Database.Database): void {
   const currentVersion = getCurrentVersion(db);
 
@@ -33,7 +39,7 @@ export function runMigrations(db: Database.Database): void {
     return;
   }
 
-  log.info({ currentVersion, pendingCount: pending.length }, 'Running migrations');
+  log.info({ currentVersion, pendingCount: pending.length }, 'Running migrations — ensure you have a DB backup before proceeding');
 
   for (const migration of pending.sort((a, b) => a.version - b.version)) {
     db.transaction(() => {

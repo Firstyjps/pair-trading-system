@@ -16,6 +16,7 @@ export function registerCommands(
   onOpenPair?: (pair: string) => Promise<string>,
   onClosePair?: (pair: string) => Promise<string>,
   onBacktest?: (pair: string, days: number) => Promise<string>,
+  onPnlReport?: () => Promise<string>,
 ) {
   return {
     async status(ctx: CommandContext) {
@@ -134,6 +135,19 @@ export function registerCommands(
         `Wins: ${summary.wins} | Losses: ${summary.losses}`,
         `Win Rate: ${winRate}%`,
       ].join('\n'));
+    },
+
+    async pnlreport(ctx: CommandContext, onPnlReport?: () => Promise<string>) {
+      if (!onPnlReport) {
+        await ctx.reply('PnL report not configured.');
+        return;
+      }
+      try {
+        const message = await onPnlReport();
+        await ctx.reply(message);
+      } catch (err: any) {
+        await ctx.reply(`❌ Error: ${err.message}`);
+      }
     },
 
     async orphans(ctx: CommandContext) {

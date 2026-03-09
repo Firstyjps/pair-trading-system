@@ -19,6 +19,7 @@
  *   npx tsx src/scanner/auto-pair-selector.ts --universe 30 --rounds 50 --top 3 --apply
  */
 
+import 'dotenv/config';
 import * as fs from 'fs';
 import * as ccxt from 'ccxt';
 import { buildCorrelationMatrix, tagSectors, getSector, type PairCorrelation } from './correlation.js';
@@ -271,11 +272,14 @@ function runCointegrationStage(
         config.cointegrationPValue,
       );
 
-      if (
-        result.isCointegrated &&
-        result.halfLife >= config.halfLifeRange[0] &&
-        result.halfLife <= config.halfLifeRange[1]
-      ) {
+      // Soft filter: accept pairs with finite half-life in range
+      // Cointegration p-value is used for ranking, not hard gating
+      // (crypto pairs are often correlated but not strictly cointegrated;
+      //  the quick backtest stage will filter out non-profitable pairs)
+      const halfLifeOk = result.halfLife >= config.halfLifeRange[0] &&
+                          result.halfLife <= config.halfLifeRange[1];
+
+      if (halfLifeOk) {
         passing.push({
           ...c,
           stage: 'cointegration',
@@ -292,7 +296,12 @@ function runCointegrationStage(
   }
 
   console.log(''); // newline after progress
-  passing.sort((a, b) => (a.cointegration?.pValue ?? 1) - (b.cointegration?.pValue ?? 1));
+  // Sort by pValue ascending (best cointegration first), then halfLife
+  passing.sort((a, b) => {
+    const pDiff = (a.cointegration?.pValue ?? 1) - (b.cointegration?.pValue ?? 1);
+    if (Math.abs(pDiff) > 0.01) return pDiff;
+    return (a.cointegration?.halfLife ?? Infinity) - (b.cointegration?.halfLife ?? Infinity);
+  });
   return passing;
 }
 

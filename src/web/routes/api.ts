@@ -12,9 +12,76 @@ import { calculateZScore } from '../../scanner/signal-generator.js';
 import { createChildLogger } from '../../logger.js';
 import type { OHLCVCandle } from '../../types.js';
 import fs from 'fs';
+import path from 'path';
 import ccxt from 'ccxt';
 
 const log = createChildLogger('api');
+
+// ─── Rate Limiter (in-memory) ───
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const rateLimitMap = new Map<string, RateLimitEntry>();
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 60;
+const RATE_LIMIT_MAX_RELAXED = 200; // for /overview, /health
+
+function getRateLimitKey(req: Request): string {
+  return (req.ip ?? req.socket?.remoteAddress ?? 'unknown') as string;
+}
+
+function checkRateLimit(ip: string, max: number): { allowed: boolean; retryAfterMs: number } {
+  const now = Date.now();
+  let entry = rateLimitMap.get(ip);
+  if (!entry || now >= entry.resetAt) {
+    entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitMap.set(ip, entry);
+  }
+  entry.count++;
+  if (entry.count > max) {
+    return { allowed: false, retryAfterMs: entry.resetAt - now };
+  }
+  return { allowed: true, retryAfterMs: 0 };
+}
+
+// Cleanup stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now >= entry.resetAt) rateLimitMap.delete(ip);
+  }
+}, 300_000).unref();
+
+// ─── Input Validation Helpers ───
+
+const PAIR_REGEX = /^[A-Z0-9]{1,20}\/[A-Z0-9]{1,20}$/i;
+const MAX_QUERY_LIMIT = 500;
+
+function sanitizePairParam(raw: string): string | null {
+  const decoded = decodeURIComponent(raw);
+  return PAIR_REGEX.test(decoded) ? decoded : null;
+}
+
+function parseQueryLimit(raw: unknown, defaultVal: number = 50): number {
+  const n = parseInt(raw as string);
+  if (!Number.isFinite(n) || n < 1) return defaultVal;
+  return Math.min(n, MAX_QUERY_LIMIT);
+}
+
+function parsePositiveFloat(raw: unknown, defaultVal: number): number {
+  const n = parseFloat(raw as string);
+  if (!Number.isFinite(n) || n <= 0) return defaultVal;
+  return n;
+}
+
+function parsePositiveInt(raw: unknown, defaultVal: number): number {
+  const n = parseInt(raw as string);
+  if (!Number.isFinite(n) || n < 1) return defaultVal;
+  return n;
+}
 
 // Top USDT-SWAP symbols to scan (public data, no API key needed)
 const SCAN_SYMBOLS = [
@@ -114,6 +181,19 @@ function shortSymbol(sym: string): string {
 export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter | null): Router {
   const router = Router();
 
+  // ─── Rate Limiting Middleware ───
+  router.use((req: Request, res: Response, next) => {
+    const ip = getRateLimitKey(req);
+    const relaxedPaths = ['/overview', '/health'];
+    const max = relaxedPaths.some(p => req.path === p) ? RATE_LIMIT_MAX_RELAXED : RATE_LIMIT_MAX;
+    const { allowed, retryAfterMs } = checkRateLimit(ip, max);
+    if (!allowed) {
+      res.set('Retry-After', String(Math.ceil(retryAfterMs / 1000)));
+      return res.status(429).json({ error: 'Too Many Requests' });
+    }
+    next();
+  });
+
   // ─── Overview ───
   router.get('/overview', (_req: Request, res: Response) => {
     try {
@@ -192,7 +272,7 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
 
   router.get('/positions/closed', (req: Request, res: Response) => {
     try {
-      const limit = parseInt(req.query.limit as string) || 50;
+      const limit = parseQueryLimit(req.query.limit, 50);
       const positions = queries.getClosedPositions(limit);
       res.json({ positions });
     } catch (err) {
@@ -436,8 +516,11 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
   // ─── Spread Monitor ───
   router.get('/spread/:pair', (req: Request, res: Response) => {
     try {
-      const pair = decodeURIComponent(req.params.pair as string);
-      const limit = parseInt(req.query.limit as string) || 500;
+      const pair = sanitizePairParam(req.params.pair as string);
+      if (!pair) {
+        return res.status(400).json({ error: 'Invalid pair format. Expected e.g. BTC/ETH' });
+      }
+      const limit = parseQueryLimit(req.query.limit, 500);
       const history = queries.getZScoreHistory(pair, limit);
       const config = getTradingConfig();
 
@@ -483,14 +566,21 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
   router.get('/backtest/run', async (req: Request, res: Response) => {
     try {
       const pair = req.query.pair as string;
-      const entryZ = parseFloat(req.query.entryZ as string) || 2.0;
-      const exitZ = parseFloat(req.query.exitZ as string) || 0.5;
-      const stopLossZ = parseFloat(req.query.stopLossZ as string) || 3.0;
-      const lookback = parseInt(req.query.lookback as string) || 168;
-      const corrThreshold = parseFloat(req.query.corrThreshold as string) || 0.75;
-
       if (!pair) {
         return res.status(400).json({ error: 'pair parameter required (e.g., BTC/ETH)' });
+      }
+      if (!PAIR_REGEX.test(pair)) {
+        return res.status(400).json({ error: 'Invalid pair format. Expected e.g. BTC/ETH' });
+      }
+
+      const entryZ = parsePositiveFloat(req.query.entryZ, 2.0);
+      const exitZ = parsePositiveFloat(req.query.exitZ, 0.5);
+      const stopLossZ = parsePositiveFloat(req.query.stopLossZ, 3.0);
+      const lookback = parsePositiveInt(req.query.lookback, 168);
+      const corrThreshold = parsePositiveFloat(req.query.corrThreshold, 0.75);
+
+      if (entryZ > 10 || exitZ > 10 || stopLossZ > 20 || lookback > 10000) {
+        return res.status(400).json({ error: 'Parameter values out of reasonable range' });
       }
 
       const [symA, symB] = pair.split('/');
@@ -594,6 +684,9 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
       if (!pair) {
         return res.status(400).json({ error: 'pair parameter required' });
       }
+      if (!PAIR_REGEX.test(pair)) {
+        return res.status(400).json({ error: 'Invalid pair format. Expected e.g. BTC/ETH' });
+      }
 
       const [symA, symB] = pair.split('/');
       // Auto-fetch historical data if insufficient
@@ -661,8 +754,23 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
     }
   });
 
-  router.post('/config', (req: Request, res: Response) => {
+  router.post('/config', async (req: Request, res: Response) => {
     try {
+      // Auth check
+      const configSecret = process.env.CONFIG_SECRET || process.env.WEB_CONFIG_TOKEN;
+      if (!configSecret) {
+        return res.status(401).json({ error: 'Unauthorized — CONFIG_SECRET not configured' });
+      }
+
+      const authHeader = req.headers.authorization;
+      const tokenHeader = req.headers['x-config-token'] as string | undefined;
+      const token = tokenHeader
+        ?? (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined);
+
+      if (!token || token !== configSecret) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
       const updates = req.body;
       if (!updates || typeof updates !== 'object') {
         return res.status(400).json({ error: 'Request body must be a JSON object' });
@@ -671,11 +779,14 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
       const newConfig = updateTradingConfig(updates);
       queries.insertConfigHistory(JSON.stringify(newConfig));
 
-      // Also write to config.json file
+      // Also write to config.json file (async, non-blocking)
       try {
-        fs.writeFileSync('./config.json', JSON.stringify(newConfig, null, 2));
-      } catch {
-        // Non-critical
+        await fs.promises.writeFile(
+          path.join(process.cwd(), 'config.json'),
+          JSON.stringify(newConfig, null, 2),
+        );
+      } catch (writeErr) {
+        log.warn({ error: writeErr }, 'Failed to write config.json (non-critical)');
       }
 
       res.json({ config: newConfig, message: 'Config updated successfully' });

@@ -30,6 +30,7 @@ const TradingConfigSchema = z.object({
   gracePeriodMs: z.number().int().positive().default(300000),
   reconciliationIntervalMs: z.number().int().positive().default(300000),
   scanIntervalMs: z.number().int().positive().default(3600000),
+  pnlReportIntervalMs: z.number().int().min(0).default(300000), // 0 = disabled
 
   // Dedup
   signalDedup: z.boolean().default(true),
@@ -159,6 +160,58 @@ export function updateTradingConfig(updates: Partial<TradingConfig>): TradingCon
 
 export function getTradingConfig(): TradingConfig {
   if (!_tradingConfig) return loadTradingConfig();
+  return _tradingConfig;
+}
+
+export async function loadTradingConfigAsync(configPath?: string): Promise<TradingConfig> {
+  if (_tradingConfig) return _tradingConfig;
+
+  let rawConfig: Record<string, unknown> = {};
+
+  if (configPath) {
+    try {
+      const content = await fs.promises.readFile(configPath, 'utf-8');
+      rawConfig = JSON.parse(content);
+      log.info({ path: configPath }, 'Trading config loaded from file (async)');
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        log.error({ path: configPath, error: err }, 'Failed to load trading config file');
+        throw err;
+      }
+      log.warn('No trading config file found, using defaults');
+    }
+  }
+
+  // Delegate to sync parser for validation
+  return _applyTradingConfig(rawConfig);
+}
+
+function _applyTradingConfig(rawConfig: Record<string, unknown>): TradingConfig {
+  const env = process.env;
+  if (env.DEFAULT_LEVERAGE) rawConfig.maxLeverage = Number(env.DEFAULT_LEVERAGE);
+  if (env.MAX_CAPITAL_PER_PAIR) rawConfig.maxCapitalPerPair = Number(env.MAX_CAPITAL_PER_PAIR);
+  if (env.MAX_OPEN_PAIRS) rawConfig.maxOpenPairs = Number(env.MAX_OPEN_PAIRS);
+
+  const result = TradingConfigSchema.safeParse(rawConfig);
+  if (!result.success) {
+    const errors = result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`);
+    log.error({ errors }, 'Invalid trading configuration');
+    throw new Error(`Invalid trading config:\n${errors.join('\n')}`);
+  }
+
+  if (result.data.maxLeverage > 20) {
+    log.warn({ requested: result.data.maxLeverage }, 'Leverage exceeds hard cap of 20x, clamping');
+    result.data.maxLeverage = 20;
+  }
+
+  if (result.data.entryZScore + result.data.safeZoneBuffer >= result.data.stopLossZScore) {
+    log.warn(
+      { entry: result.data.entryZScore, buffer: result.data.safeZoneBuffer, sl: result.data.stopLossZScore },
+      'Entry + buffer >= SL — positions will open too close to stop loss'
+    );
+  }
+
+  _tradingConfig = result.data;
   return _tradingConfig;
 }
 

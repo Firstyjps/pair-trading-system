@@ -17,6 +17,7 @@ import { checkSpreads } from './monitor/spread-monitor.js';
 import { reconcile } from './monitor/reconciliation.js';
 import { detectOrphans } from './monitor/orphan-detector.js';
 import { dollarNeutral } from './sizing/dollar-neutral.js';
+import { buildPnLReport } from './telegram/pnl-report.js';
 import type { Direction, OHLCVCandle } from './types.js';
 import type { CointegrationResult } from './scanner/cointegration.js';
 import {
@@ -107,6 +108,23 @@ async function main() {
       },
       onClosePair: async (pair: string) => {
         return await manualClosePair(pair);
+      },
+      onPnlReport: async () => {
+        const [exchangePositions, balance, pairPositions] = await Promise.all([
+          exchangeAdapter.fetchPositions(),
+          exchangeAdapter.fetchBalance(),
+          Promise.resolve(queries.getOpenPositions()),
+        ]);
+        const realized = queries.getRealizedPnl();
+        return buildPnLReport(
+          {
+            pairPositions,
+            exchangePositions,
+            totalBalance: balance.totalEquity,
+            realizedPnl: realized.total,
+          },
+          queries,
+        );
       },
     },
   );
@@ -615,6 +633,63 @@ async function main() {
   }, ORPHAN_CHECK_MS);
 
   cleanupAndRegister('orphanDetector', orphanInterval);
+
+  // ═══ 7. Start PnL Report (Telegram, Thai format) ═══
+  const pnlReportIntervalMs = tradingConfig.pnlReportIntervalMs;
+  if (pnlReportIntervalMs > 0) {
+    logger.info({ intervalMs: pnlReportIntervalMs }, 'Starting PnL report notifications');
+
+    const pnlReportInterval = setInterval(async () => {
+      try {
+        const [exchangePositions, balance, pairPositions] = await Promise.all([
+          exchangeAdapter.fetchPositions(),
+          exchangeAdapter.fetchBalance(),
+          Promise.resolve(queries.getOpenPositions()),
+        ]);
+        const realized = queries.getRealizedPnl();
+        const message = buildPnLReport(
+          {
+            pairPositions,
+            exchangePositions,
+            totalBalance: balance.totalEquity,
+            realizedPnl: realized.total,
+          },
+          queries,
+        );
+        await notifications.pnlReport(message);
+      } catch (err) {
+        logger.error({ error: err }, 'PnL report error');
+      }
+    }, pnlReportIntervalMs);
+
+    cleanupAndRegister('pnlReport', pnlReportInterval);
+
+    // Run first report after 60s (avoid startup flood)
+    setTimeout(async () => {
+      try {
+        const [exchangePositions, balance, pairPositions] = await Promise.all([
+          exchangeAdapter.fetchPositions(),
+          exchangeAdapter.fetchBalance(),
+          Promise.resolve(queries.getOpenPositions()),
+        ]);
+        const realized = queries.getRealizedPnl();
+        const message = buildPnLReport(
+          {
+            pairPositions,
+            exchangePositions,
+            totalBalance: balance.totalEquity,
+            realizedPnl: realized.total,
+          },
+          queries,
+        );
+        await notifications.pnlReport(message);
+      } catch (err) {
+        logger.error({ error: err }, 'Initial PnL report error');
+      }
+    }, 60000);
+  } else {
+    logger.info('PnL report disabled (pnlReportIntervalMs = 0)');
+  }
 
   // ═══ System Ready ═══
   logger.info('Pair Trading System started successfully');

@@ -1,24 +1,24 @@
 {
   "correlationThreshold": 0.75,
-  "cointegrationPValue": 0.1,
-  "lookbackPeriods": 434,
-  "entryZScore": 3.3,
-  "exitZScore": 1.4,
-  "stopLossZScore": 4.5,
-  "safeZoneBuffer": 0.6,
-  "maxLeverage": 10,
-  "maxCapitalPerPair": 25,
-  "maxOpenPairs": 1,
+  "cointegrationPValue": 0.05,
+  "lookbackPeriods": 168,
+  "entryZScore": 2,
+  "exitZScore": 0.3,
+  "stopLossZScore": 3,
+  "safeZoneBuffer": 0.5,
+  "autoTradingEnabled": true,
+  "maxLeverage": 5,
+  "maxCapitalPerPair": 300,
+  "maxOpenPairs": 8,
   "cooldownMs": 3600000,
   "gracePeriodMs": 300000,
   "reconciliationIntervalMs": 300000,
   "scanIntervalMs": 3600000,
+  "pnlReportIntervalMs": 300000,
+  "pnlReportIntervalMs": 300000,
   "signalDedup": true,
   "notificationTTL": 300000,
   "sizingMethod": "dollar-neutral",
   "fixedFractionPercent": 0.1,
-  "primaryTimeframe": "1h",
-  "targetPairs": [
-    "PEPE/SHIB"
-  ]
+  "primaryTimeframe": "1h"
 }

@@ -1,11 +1,20 @@
 import 'dotenv/config';
 
 async function check() {
+  const apiKey = process.env.OKX_API_KEY?.trim();
+  const secret = process.env.OKX_SECRET?.trim();
+  const passphrase = process.env.OKX_PASSPHRASE?.trim();
+
+  if (!apiKey || !secret || !passphrase) {
+    console.error('Missing OKX_API_KEY, OKX_SECRET or OKX_PASSPHRASE');
+    process.exit(1);
+  }
+
   const ccxt = await import('ccxt');
   const exchange = new ccxt.okx({
-    apiKey: process.env.OKX_API_KEY!.trim(),
-    secret: process.env.OKX_SECRET!.trim(),
-    password: process.env.OKX_PASSPHRASE!.trim(),
+    apiKey,
+    secret,
+    password: passphrase,
     enableRateLimit: true,
     options: { defaultType: 'swap' },
   });

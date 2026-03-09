@@ -42,7 +42,7 @@ export function validateOrder(order: OrderParams): ValidationResult {
   }
 
   if (failures.length > 0) {
-    log.warn({ order, failures }, 'Order validation failed');
+    log.warn({ instrument: order.instrument, side: order.side, failures }, 'Order validation failed');
   }
 
   return { valid: failures.length === 0, failures };

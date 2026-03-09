@@ -168,6 +168,12 @@ export class NotificationService {
     await this.send('SUMMARY', message, dedupKey);
   }
 
+  /** Send periodic PnL report (Thai format, like Pairtrading bot) */
+  async pnlReport(message: string): Promise<void> {
+    const bucket = Math.floor(Date.now() / 300000); // 5-minute bucket
+    await this.send('PNL_REPORT', message, `pnl:${bucket}`);
+  }
+
   clearMemoryCache(): void {
     this.sentKeys.clear();
   }

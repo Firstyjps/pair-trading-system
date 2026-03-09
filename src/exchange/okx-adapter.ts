@@ -4,6 +4,7 @@ import type { ReconciliationExchange, ExchangePosition } from '../monitor/reconc
 import type { DataFetcherExchange, MarketInfo } from '../scanner/data-fetcher.js';
 import type { OrderParams } from '../types.js';
 import { createChildLogger } from '../logger.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const log = createChildLogger('okx-adapter');
 
@@ -43,6 +44,8 @@ export class OkxAdapter
     try {
       log.info({ symbol, side: params.side, size: params.size, leverage: params.leverage }, 'Creating order');
 
+      const clientOrderId = uuidv4().replace(/-/g, '').slice(0, 32);
+
       const order = await this.exchange.createOrder(
         symbol,
         'market',
@@ -52,6 +55,7 @@ export class OkxAdapter
         {
           tdMode: 'cross',     // Cross-margin mode for swaps
           reduceOnly: params.reduceOnly ?? false,
+          clOrdId: clientOrderId,
         },
       );
 

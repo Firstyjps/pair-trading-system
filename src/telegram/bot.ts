@@ -25,6 +25,7 @@ export function createTelegramBot(
     onOpenPair?: (pair: string) => Promise<string>;
     onClosePair?: (pair: string) => Promise<string>;
     onBacktest?: (pair: string, days: number) => Promise<string>;
+    onPnlReport?: () => Promise<string>;
   },
 ): { bot: TelegramBotAdapter; notifications: NotificationService } {
   const commands = registerCommands(
@@ -34,6 +35,7 @@ export function createTelegramBot(
     callbacks?.onOpenPair,
     callbacks?.onClosePair,
     callbacks?.onBacktest,
+    callbacks?.onPnlReport,
   );
 
   const notifications = new NotificationService(notificationSender, queries, chatId);
@@ -47,6 +49,7 @@ export function createTelegramBot(
   botAdapter.onCommand('setconfig', (ctx, key, value) => commands.setconfig(ctx, key, value));
   botAdapter.onCommand('backtest', (ctx, pair, days) => commands.backtest(ctx, pair, days));
   botAdapter.onCommand('pnl', (ctx) => commands.pnl(ctx));
+  botAdapter.onCommand('pnlreport', (ctx) => commands.pnlreport(ctx, callbacks?.onPnlReport));
   botAdapter.onCommand('orphans', (ctx) => commands.orphans(ctx));
 
   // Register singleton (RULE 5)

@@ -23,6 +23,7 @@ import { buildCorrelationMatrix, tagSectors } from '../scanner/correlation.js';
 import { testCointegration } from '../scanner/cointegration.js';
 import { fetchHistoricalData, fetchMultipleSymbols, getCacheInfo, type HistoricalFetchConfig } from './historical-fetcher.js';
 import { createChildLogger } from '../logger.js';
+import { loadEnvConfig } from '../config.js';
 
 const log = createChildLogger('backtest-cli');
 
@@ -162,17 +163,18 @@ async function fetchPairData(
   timeframe: string,
   limit: number,
 ): Promise<{ pricesA: number[]; pricesB: number[] }> {
+  const envConfig = loadEnvConfig();
   const ccxt = await import('ccxt');
 
   const exchange = new ccxt.okx({
-    apiKey: process.env.OKX_API_KEY,
-    secret: process.env.OKX_SECRET,
-    password: process.env.OKX_PASSPHRASE,
+    apiKey: envConfig.OKX_API_KEY,
+    secret: envConfig.OKX_SECRET,
+    password: envConfig.OKX_PASSPHRASE,
     enableRateLimit: true,
     options: { defaultType: 'swap' },
   });
 
-  if (process.env.OKX_SANDBOX === 'true') {
+  if (envConfig.OKX_SANDBOX) {
     exchange.setSandboxMode(true);
   }
 
@@ -201,17 +203,18 @@ async function findCorrelatedPairs(
   limit: number,
   threshold: number = 0.75,
 ): Promise<Array<{ symbolA: string; symbolB: string; correlation: number }>> {
+  const envConfig = loadEnvConfig();
   const ccxt = await import('ccxt');
 
   const exchange = new ccxt.okx({
-    apiKey: process.env.OKX_API_KEY,
-    secret: process.env.OKX_SECRET,
-    password: process.env.OKX_PASSPHRASE,
+    apiKey: envConfig.OKX_API_KEY,
+    secret: envConfig.OKX_SECRET,
+    password: envConfig.OKX_PASSPHRASE,
     enableRateLimit: true,
     options: { defaultType: 'swap' },
   });
 
-  if (process.env.OKX_SANDBOX === 'true') {
+  if (envConfig.OKX_SANDBOX) {
     exchange.setSandboxMode(true);
   }
 

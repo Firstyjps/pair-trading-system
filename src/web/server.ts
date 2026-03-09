@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { initializeDatabase } from '../db/schema.js';
 import { runMigrations } from '../db/migrations.js';
 import { TradingQueries } from '../db/queries.js';
-import { loadTradingConfig } from '../config.js';
+import { loadTradingConfig, loadTradingConfigAsync } from '../config.js';
 import { createApiRouter } from './routes/api.js';
 import { createOkxAdapter, type OkxAdapter } from '../exchange/okx-adapter.js';
 import { logger } from '../logger.js';
@@ -14,10 +14,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = parseInt(process.env.WEB_PORT ?? '3000', 10);
-const DB_PATH = process.env.DB_PATH ?? './data/trading.db';
 
-// Load config (defaults if no file)
-try { loadTradingConfig('./config.json'); } catch { loadTradingConfig(); }
+// Resolve paths to absolute (Fix #10)
+const rawDbPath = process.env.DB_PATH ?? './data/trading.db';
+const DB_PATH = path.isAbsolute(rawDbPath) ? rawDbPath : path.resolve(process.cwd(), rawDbPath);
+const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
 
 // Initialize DB
 const db = initializeDatabase(DB_PATH);
@@ -50,6 +51,9 @@ async function initExchange(): Promise<OkxAdapter | null> {
 
 // Start server
 (async () => {
+  // Load config async
+  await loadTradingConfigAsync(CONFIG_PATH).catch(() => loadTradingConfig());
+
   exchange = await initExchange();
 
   const app = express();
@@ -66,7 +70,24 @@ async function initExchange(): Promise<OkxAdapter | null> {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     logger.info({ port: PORT, db: DB_PATH, exchange: exchange ? 'connected' : 'none' }, `Dashboard running at http://localhost:${PORT}`);
   });
+
+  // Graceful shutdown
+  const shutdown = () => {
+    logger.info('Shutting down web server...');
+    server.close(() => {
+      logger.info('Web server closed');
+      process.exit(0);
+    });
+    // Force exit after 10s
+    setTimeout(() => {
+      logger.warn('Shutdown timeout — forcing exit');
+      process.exit(1);
+    }, 10_000).unref();
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 })();
