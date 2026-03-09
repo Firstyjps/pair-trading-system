@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Data and DB
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Build and tooling
+dist/
+coverage/
+*.tsbuildinfo
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Optional (uncomment if needed)
+# .cursor/
+# .claude/

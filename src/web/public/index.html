@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pairs Trading Scanner</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- ═══ TOP STATUS BAR ═══ -->
+  <header id="status-bar">
+    <div class="status-left">
+      <span class="brand">PAIRS SCANNER <span class="brand-ver">v2.0</span></span>
+      <span class="status-badge status-idle" id="status-indicator">
+        <span class="status-dot"></span> STATUS: IDLE
+      </span>
+      <span class="status-badge badge-connected" id="okx-badge">OKX CONNECTED</span>
+    </div>
+    <div class="status-right">
+      <span class="status-badge" id="auto-trading-badge">AUTO: --</span>
+      <span class="status-info" id="pairs-count">PAIRS: 0</span>
+      <span class="status-info" id="trades-count">TRADES: 0</span>
+      <span class="status-clock" id="clock">00:00:00</span>
+    </div>
+  </header>
+
+  <!-- ═══ TICKER TAPE ═══ -->
+  <div id="ticker-tape">
+    <div class="ticker-track" id="ticker-track">
+      <div class="ticker-group" id="ticker-group-1"></div>
+      <div class="ticker-group" id="ticker-group-2"></div>
+    </div>
+  </div>
+
+  <!-- ═══ PAGE NAVIGATION — Colored Badge Tabs ═══ -->
+  <nav id="page-nav">
+    <div class="nav-badges">
+      <button class="nav-badge nav-badge-green active" data-page="scanner">UNI</button>
+      <button class="nav-badge nav-badge-cyan" data-page="portfolio">PORT</button>
+      <button class="nav-badge nav-badge-purple" data-page="auto">AUTO</button>
+      <button class="nav-badge nav-badge-yellow" data-page="backtest">BT</button>
+      <button class="nav-badge nav-badge-orange" data-page="logs">LOG</button>
+      <button class="nav-badge nav-badge-red" data-page="orders">ORP</button>
+    </div>
+    <div class="nav-right">
+      <span class="status-info" id="auto-sched-info">LAST: — | EVERY: —</span>
+    </div>
+  </nav>
+
+  <!-- ═══ PAGE: SCANNER (UNI) ═══ -->
+  <section id="page-scanner" class="page active">
+    <div class="page-header">
+      <h1>PAIRS TRADING SCANNER</h1>
+      <p class="subtitle">Real-time correlation analysis and signal detection for crypto perpetual swaps</p>
+    </div>
+
+    <div class="metrics-row" id="scanner-metrics">
+      <div class="metric-card"><div class="metric-value" id="met-pnl">$0.00</div><div class="metric-label">TOTAL P&L</div></div>
+      <div class="metric-card"><div class="metric-value" id="met-winrate">0%</div><div class="metric-label">WIN RATE</div></div>
+      <div class="metric-card"><div class="metric-value" id="met-active">0</div><div class="metric-label">ACTIVE</div></div>
+      <div class="metric-card"><div class="metric-value" id="met-maxdd">$0.00</div><div class="metric-label">MAX DRAWDOWN</div></div>
+      <div class="metric-card"><div class="metric-value" id="met-sharpe">0.00</div><div class="metric-label">SHARPE RATIO</div></div>
+      <div class="metric-card"><div class="metric-value" id="met-pf">0.00</div><div class="metric-label">PROFIT FACTOR</div></div>
+    </div>
+
+    <div class="tab-bar">
+      <div class="tabs">
+        <button class="tab active">CRYPTO (<span id="crypto-count">0</span>)</button>
+      </div>
+      <div class="actions">
+        <button class="btn-terminal" id="btn-scan" onclick="runScan()">SCAN</button>
+        <button class="btn-terminal" id="btn-refresh" onclick="refreshScanner()">REFRESH</button>
+        <button class="btn-terminal" id="btn-config" onclick="switchPage('settings')">CONFIG</button>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="filter-bar">
+      <span class="filter-label">FILTER:</span>
+      <label>Min Corr <input type="number" id="filter-min-corr" value="0.5" min="0" max="1" step="0.05"></label>
+      <label>Max p-value <input type="number" id="filter-max-pvalue" value="1" min="0" max="1" step="0.01"></label>
+      <label>Instruction
+        <select id="filter-instruction">
+          <option value="">All</option>
+          <option value="OPEN_PAIR">OPEN PAIR</option>
+          <option value="CLOSE_SL">CLOSE SL</option>
+          <option value="CLOSE_TP">CLOSE TP</option>
+          <option value="HOLD">HOLD</option>
+          <option value="SIGNAL_ONLY">SIGNAL ONLY</option>
+        </select>
+      </label>
+      <button class="btn-terminal btn-sm" onclick="applyScannerFilter()">APPLY</button>
+    </div>
+
+    <!-- Full-width watchlist with ORDER INSTRUCTION column -->
+    <div class="panel panel-watchlist-full">
+      <div class="panel-header">PAIRS WATCHLIST</div>
+      <div class="table-wrap">
+        <table class="terminal-table" id="pairs-table">
+          <thead>
+            <tr>
+              <th>PAIR</th>
+              <th>CORR</th>
+              <th>COINT.</th>
+              <th>Z-SCORE</th>
+              <th>HALF-LIFE</th>
+              <th>SIGNAL</th>
+              <th>ORDER INSTRUCTION</th>
+              <th>ACTIONS</th>
+            </tr>
+          </thead>
+          <tbody id="pairs-tbody">
+            <tr><td colspan="8" class="empty-msg">Run a scan to discover pairs</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Trade History Section -->
+    <div class="trade-history-section">
+      <div class="panel-header">TRADE HISTORY</div>
+      <div class="sub-tabs" id="scanner-subtabs">
+        <button class="sub-tab active" data-subtab="scan-signals" onclick="switchScannerSubTab('scan-signals')">SIGNALS</button>
+        <button class="sub-tab" data-subtab="scan-positions" onclick="switchScannerSubTab('scan-positions')">POSITIONS</button>
+        <button class="sub-tab" data-subtab="scan-logs" onclick="switchScannerSubTab('scan-logs')">LOGS</button>
+      </div>
+      <div id="subtab-scan-signals" class="subtab-content active">
+        <table class="terminal-table">
+          <thead>
+            <tr><th>TIME</th><th>PAIR</th><th>DIRECTION</th><th>Z-SCORE</th><th>STATUS</th></tr>
+          </thead>
+          <tbody id="scan-signals-tbody">
+            <tr><td colspan="5" class="empty-msg">No recent signals</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="subtab-scan-positions" class="subtab-content">
+        <table class="terminal-table">
+          <thead>
+            <tr><th>PAIR</th><th>DIRECTION</th><th>ENTRY Z</th><th>CURRENT Z</th><th>P&L</th><th>DURATION</th></tr>
+          </thead>
+          <tbody id="scan-positions-tbody">
+            <tr><td colspan="6" class="empty-msg">No open positions</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="subtab-scan-logs" class="subtab-content">
+        <div class="log-feed" id="scan-log-feed">
+          <div class="empty-msg">No scanner events logged</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OKX Account Summary Bar -->
+    <div class="okx-summary-bar" id="okx-summary-bar">
+      <span class="okx-summary-label">OKX ACCOUNT</span>
+      <span class="okx-summary-item">EQUITY: <span class="okx-summary-val" id="okx-sum-equity">$0.00</span></span>
+      <span class="okx-summary-item">
+        MARGIN: <span class="okx-summary-val" id="okx-sum-margin-pct">0%</span>
+        <div class="margin-bar"><div class="margin-fill" id="okx-margin-fill" style="width:0%"></div></div>
+      </span>
+      <span class="okx-summary-item">UPL: <span class="okx-summary-val" id="okx-sum-upl">$0.00</span></span>
+      <span class="okx-summary-item">POSITIONS: <span class="okx-summary-val" id="okx-sum-poscount">0</span></span>
+    </div>
+
+    <!-- Correlation Heatmap -->
+    <div class="heatmap-section">
+      <div class="panel-header">CORRELATION MATRIX</div>
+      <div class="heatmap-wrap"><canvas id="heatmap-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: PORTFOLIO ═══ -->
+  <section id="page-portfolio" class="page">
+    <div class="portfolio-header">
+      <div class="port-left">
+        <span class="status-badge badge-connected" id="port-okx-badge">OKX CONNECTED</span>
+        <span class="port-uid" id="port-uid">UID: ---</span>
+      </div>
+      <button class="btn-terminal" onclick="loadPortfolio()">REFRESH</button>
+    </div>
+
+    <div class="metrics-row big" id="port-main-cards">
+      <div class="metric-card big"><div class="metric-value" id="port-equity">$0.00</div><div class="metric-label">TOTAL EQUITY</div></div>
+      <div class="metric-card big"><div class="metric-value" id="port-available">$0.00</div><div class="metric-label">AVAILABLE</div></div>
+      <div class="metric-card big"><div class="metric-value" id="port-upnl">$0.00</div><div class="metric-label">UNREALIZED P&L</div></div>
+      <div class="metric-card big"><div class="metric-value" id="port-frozen">$0.00</div><div class="metric-label">FROZEN</div></div>
+      <div class="metric-card big"><div class="metric-value" id="port-accttype">—</div><div class="metric-label">ACCOUNT TYPE</div></div>
+      <div class="metric-card big"><div class="metric-value" id="port-posmode">—</div><div class="metric-label">POS MODE</div></div>
+    </div>
+
+    <div class="metrics-row small" id="port-stats">
+      <div class="metric-card sm"><div class="metric-value" id="ps-rpnl">$0.00</div><div class="metric-label">REALIZED P&L</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-fees">$0.00</div><div class="metric-label">TOTAL FEES</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-trades">0</div><div class="metric-label">TOTAL TRADES</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-open">0</div><div class="metric-label">OPEN POS</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-wr">0%</div><div class="metric-label">WIN RATE</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-avgwin">$0.00</div><div class="metric-label">AVG WIN</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-avgloss">$0.00</div><div class="metric-label">AVG LOSS</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-pf">0.00</div><div class="metric-label">PROFIT FACTOR</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-best">$0.00</div><div class="metric-label">BEST TRADE</div></div>
+      <div class="metric-card sm"><div class="metric-value" id="ps-worst">$0.00</div><div class="metric-label">WORST TRADE</div></div>
+    </div>
+
+    <!-- Exchange Positions (OKX) -->
+    <div class="panel exchange-positions-panel">
+      <div class="panel-header">EXCHANGE POSITIONS (OKX)</div>
+      <div class="table-wrap">
+        <table class="terminal-table">
+          <thead>
+            <tr><th>SYMBOL</th><th>SIDE</th><th>SIZE</th><th>ENTRY</th><th>MARK</th><th>UPL</th><th>UPL%</th></tr>
+          </thead>
+          <tbody id="exchange-pos-tbody">
+            <tr><td colspan="7" class="empty-msg">Loading exchange positions...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sub-tabs">
+      <button class="sub-tab active" data-subtab="overview" onclick="switchSubTab('overview')">OVERVIEW</button>
+      <button class="sub-tab" data-subtab="positions" onclick="switchSubTab('positions')">POSITIONS</button>
+      <button class="sub-tab" data-subtab="history" onclick="switchSubTab('history')">HISTORY</button>
+    </div>
+
+    <div id="subtab-overview" class="subtab-content active">
+      <div class="chart-range-bar">
+        <span class="chart-range-label">RANGE:</span>
+        <button type="button" class="btn-terminal btn-sm chart-range-btn active" data-range="all" onclick="setEquityRange('all')">ALL</button>
+        <button type="button" class="btn-terminal btn-sm chart-range-btn" data-range="30" onclick="setEquityRange('30')">30D</button>
+        <button type="button" class="btn-terminal btn-sm chart-range-btn" data-range="7" onclick="setEquityRange('7')">7D</button>
+      </div>
+      <div class="chart-container"><canvas id="port-equity-chart"></canvas></div>
+    </div>
+    <div id="subtab-positions" class="subtab-content">
+      <table class="terminal-table"><thead><tr><th>PAIR</th><th>DIRECTION</th><th>ENTRY Z</th><th>CURRENT Z</th><th>P&L</th><th>DURATION</th><th>MARGIN</th></tr></thead><tbody id="port-pos-tbody"><tr><td colspan="7" class="empty-msg">No open positions</td></tr></tbody></table>
+    </div>
+    <div id="subtab-history" class="subtab-content">
+      <table class="terminal-table"><thead><tr><th>PAIR</th><th>DIRECTION</th><th>P&L</th><th>CLOSE REASON</th><th>OPENED</th><th>CLOSED</th></tr></thead><tbody id="port-hist-tbody"><tr><td colspan="6" class="empty-msg">No trade history</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: AUTO SCHEDULER ═══ -->
+  <section id="page-auto" class="page">
+    <div class="page-header">
+      <h1>AUTO SCHEDULER</h1>
+      <p class="subtitle">Control auto-trading and scan schedule</p>
+    </div>
+    <div class="metrics-row">
+      <div class="metric-card"><div class="metric-value" id="auto-status-val">—</div><div class="metric-label">AUTO TRADING</div></div>
+      <div class="metric-card"><div class="metric-value" id="auto-interval-val">—</div><div class="metric-label">SCAN INTERVAL</div></div>
+      <div class="metric-card"><div class="metric-value" id="auto-last-scan-val">—</div><div class="metric-label">LAST SCAN</div></div>
+      <div class="metric-card"><div class="metric-value" id="auto-pairs-val">—</div><div class="metric-label">SYMBOLS CACHED</div></div>
+    </div>
+    <div class="auto-controls">
+      <button class="btn-terminal btn-primary" id="btn-toggle-auto" onclick="toggleAutoTrading()">TOGGLE AUTO TRADING</button>
+      <button class="btn-terminal" onclick="runScan()">RUN SCAN NOW</button>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: BACKTEST ═══ -->
+  <section id="page-backtest" class="page">
+    <div class="page-header"><h1>BACKTESTER</h1><p class="subtitle">Strategy testing and parameter optimization</p></div>
+    <div class="backtest-toolbar">
+      <div class="input-group"><label>PAIR</label><input type="text" id="bt-pair" value="PEPE/SHIB" placeholder="e.g. PEPE/SHIB" list="bt-pair-list"><datalist id="bt-pair-list"></datalist></div>
+      <div class="input-group"><label>ENTRY Z</label><input type="number" id="bt-entryz" value="2.0" step="0.1"></div>
+      <div class="input-group"><label>EXIT Z</label><input type="number" id="bt-exitz" value="0.5" step="0.1"></div>
+      <div class="input-group"><label>STOP LOSS Z</label><input type="number" id="bt-slz" value="3.0" step="0.1"></div>
+      <div class="input-group"><label>LOOKBACK</label><input type="number" id="bt-lookback" value="168"></div>
+      <div class="input-group"><label>CORR MIN</label><input type="number" id="bt-corr" value="0.75" step="0.05"></div>
+      <div class="btn-group">
+        <button class="btn-terminal" onclick="prefillFromConfig()">LOAD CONFIG</button>
+        <button class="btn-terminal btn-primary" onclick="runBacktest()">RUN BACKTEST</button>
+        <button class="btn-terminal" onclick="runGridSearch()">GRID SEARCH</button>
+      </div>
+    </div>
+    <div id="bt-diagnostics" style="display:none;padding:0.6rem 1rem;margin-bottom:0.5rem;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;line-height:1.6"></div>
+    <div id="bt-results" class="bt-results" style="display:none">
+      <div class="metrics-row" id="bt-metrics"></div>
+      <div class="chart-container"><canvas id="bt-equity-chart"></canvas></div>
+      <div class="panel-header">TRADE LOG</div>
+      <div class="table-wrap">
+        <table class="terminal-table"><thead><tr><th>#</th><th>TYPE</th><th>ENTRY BAR</th><th>EXIT BAR</th><th>P&L</th><th>Z-IN</th><th>Z-OUT</th><th>REASON</th></tr></thead><tbody id="bt-trades-tbody"></tbody></table>
+      </div>
+    </div>
+    <div id="bt-apply-bar" style="display:none;margin-top:12px">
+      <button class="btn-terminal btn-primary" onclick="applyBacktestToConfig()">SET AS LIVE CONFIG</button>
+      <span class="bt-apply-hint" style="font-size:var(--font-xs);color:var(--text-dim);margin-left:12px">Apply these parameters as the live trading config</span>
+    </div>
+    <div id="grid-results" class="bt-results" style="display:none">
+      <div class="panel-header">GRID SEARCH RESULTS</div>
+      <div class="table-wrap">
+        <table class="terminal-table"><thead><tr><th>RANK</th><th>ENTRY Z</th><th>EXIT Z</th><th>SL Z</th><th>TRADES</th><th>WIN RATE</th><th>P&L</th><th>SHARPE</th><th>MAX DD</th><th>PF</th></tr></thead><tbody id="grid-tbody"></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: LOGS ═══ -->
+  <section id="page-logs" class="page">
+    <div class="page-header">
+      <h1>SYSTEM LOGS</h1>
+      <p class="subtitle">Recent signals, trade events, and system errors</p>
+    </div>
+    <div class="sub-tabs" id="log-subtabs">
+      <button class="sub-tab active" data-subtab="log-signals" onclick="switchLogSubTab('log-signals')">SIGNALS</button>
+      <button class="sub-tab" data-subtab="log-trades" onclick="switchLogSubTab('log-trades')">TRADES</button>
+      <button class="sub-tab" data-subtab="log-errors" onclick="switchLogSubTab('log-errors')">ERRORS</button>
+    </div>
+    <div id="subtab-log-signals" class="subtab-content active">
+      <div class="table-wrap" style="max-height:600px">
+        <table class="terminal-table"><thead><tr><th>TIME</th><th>PAIR</th><th>DIRECTION</th><th>Z-SCORE</th><th>STATUS</th></tr></thead>
+        <tbody id="log-signals-tbody"><tr><td colspan="5" class="empty-msg">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+    <div id="subtab-log-trades" class="subtab-content">
+      <div class="table-wrap" style="max-height:600px">
+        <table class="terminal-table"><thead><tr><th>PAIR</th><th>DIRECTION</th><th>P&L</th><th>REASON</th><th>OPENED</th><th>CLOSED</th></tr></thead>
+        <tbody id="log-trades-tbody"><tr><td colspan="6" class="empty-msg">Loading...</td></tr></tbody></table>
+      </div>
+    </div>
+    <div id="subtab-log-errors" class="subtab-content">
+      <div class="log-feed" id="log-errors-feed" style="max-height:600px;overflow-y:auto;padding:14px">
+        <div class="empty-msg">No errors recorded in current session</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: ORPHAN MONITOR ═══ -->
+  <section id="page-orders" class="page">
+    <div class="page-header">
+      <h1>ORPHAN MONITOR</h1>
+      <p class="subtitle">Exchange positions not tracked by the system</p>
+    </div>
+    <div class="panel">
+      <div class="panel-header">EXCHANGE POSITIONS vs DB</div>
+      <div class="table-wrap" style="max-height:500px">
+        <table class="terminal-table">
+          <thead><tr><th>SYMBOL</th><th>SIDE</th><th>SIZE</th><th>UPL</th><th>STATUS</th></tr></thead>
+          <tbody id="orphan-tbody"><tr><td colspan="5" class="empty-msg">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn-terminal" onclick="loadOrphanPage()">REFRESH</button>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: SETTINGS ═══ -->
+  <section id="page-settings" class="page">
+    <div class="page-header"><h1>CONFIGURATION</h1><p class="subtitle">Trading parameters and system settings</p></div>
+    <div id="config-source-bar" class="config-source-bar">
+      <span>Source: <strong id="cfg-source-label">config.json</strong></span>
+      <span class="cfg-last-mod" id="cfg-last-mod">—</span>
+    </div>
+    <div id="settings-grouped"></div>
+    <div class="settings-actions">
+      <button class="btn-terminal btn-primary" onclick="saveConfig()">SAVE CONFIG</button>
+      <button class="btn-terminal" onclick="resetConfigToDefault()">RESET DEFAULTS</button>
+    </div>
+  </section>
+
+  <!-- Spread Detail Modal -->
+  <div id="spread-modal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="spread-modal-title">SPREAD — </h3>
+        <button type="button" class="modal-close" onclick="closeSpreadModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="chart-container small"><canvas id="spread-modal-chart"></canvas></div>
+        <p class="modal-hint" id="spread-modal-hint">Z-Score history (last 50 points)</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

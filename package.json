@@ -1,0 +1,49 @@
+{
+  "name": "pair-trading-system",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "node node_modules/vitest/dist/cli.js run",
+    "test:watch": "node node_modules/vitest/dist/cli.js",
+    "test:coverage": "node node_modules/vitest/dist/cli.js run --coverage",
+    "web": "tsx src/web/server.ts",
+    "backtest": "tsx src/backtest/run.ts",
+    "backtest:verbose": "tsx src/backtest/run.ts --verbose",
+    "backtest:all": "tsx src/backtest/run.ts --all-pairs",
+    "backtest:3y": "tsx src/backtest/run.ts --years 3 --verbose",
+    "optimize": "tsx src/backtest/zscore-optimizer.ts",
+    "optimize:pepe": "tsx src/backtest/zscore-optimizer.ts --pair PEPE/SHIB --rounds 1000 --years 3",
+    "optimize:both": "tsx src/backtest/zscore-optimizer.ts --pair PEPE/SHIB --rounds 1000 --years 3 -s both",
+    "walk-forward": "tsx src/backtest/walk-forward-analysis.ts",
+    "walk-forward:eth": "tsx src/backtest/walk-forward-analysis.ts --pair ETH/XRP --rounds 300 --years 3 --seed 42",
+    "walk-forward:pepe": "tsx src/backtest/walk-forward-analysis.ts --pair PEPE/SHIB --rounds 300 --years 3 --seed 42",
+    "auto-select": "tsx src/scanner/auto-pair-selector.ts",
+    "auto-select:fast": "tsx src/scanner/auto-pair-selector.ts --universe 30 --rounds 50 --top 3",
+    "auto-select:apply": "tsx src/scanner/auto-pair-selector.ts --apply"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "ccxt": "^4.4.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "grammy": "^1.31.0",
+    "node-cron": "^3.0.3",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "simple-statistics": "^7.8.7",
+    "uuid": "^11.0.5",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
