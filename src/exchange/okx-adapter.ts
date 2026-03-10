@@ -244,11 +244,19 @@ export class OkxAdapter
     try {
       const balance = await this.exchange.fetchBalance({ type: 'swap' });
       const usdt = balance?.USDT ?? balance?.info?.data?.[0] ?? {};
+      const rawData = balance?.info?.data?.[0] ?? {};
+
+      // Calculate actual unrealized PnL from open positions
+      const positions = await this.fetchPositions();
+      const actualUpl = positions
+        .filter(p => p.size > 0)
+        .reduce((sum, p) => sum + p.unrealizedPnl, 0);
+
       return {
         totalEquity: Number(usdt.total ?? 0),
         availableBalance: Number(usdt.free ?? 0),
-        unrealizedPnl: Number(usdt.used ?? 0),
-        frozenBalance: Number(balance?.info?.data?.[0]?.frozenBal ?? 0),
+        unrealizedPnl: actualUpl,
+        frozenBalance: Number(rawData.frozenBal ?? 0),
       };
     } catch (err: any) {
       log.error({ error: err.message }, 'Failed to fetch balance');

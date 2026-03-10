@@ -51,6 +51,12 @@ const TradingConfigSchema = z.object({
   /** Fee rate per side (entry + exit = 2x this) */
   feeRate: z.number().min(0).default(0.0006),
 
+  // Daily loss kill switch — stop trading if daily realized loss exceeds this (0 = disabled)
+  maxDailyLossUsd: z.number().min(0).default(0),
+
+  // Orphan auto-close — auto-close orphan positions after this many ms (0 = disabled, manual only)
+  orphanAutoCloseAfterMs: z.number().int().min(0).default(0),
+
   // Dedup
   signalDedup: z.boolean().default(true),
   notificationTTL: z.number().int().positive().default(300000),
@@ -168,8 +174,8 @@ export function updateTradingConfig(updates: Partial<TradingConfig>): TradingCon
     throw new Error(`Invalid config update: ${result.error.issues.map(i => i.message).join(', ')}`);
   }
 
-  if (result.data.maxLeverage > 20) {
-    result.data.maxLeverage = 20;
+  if (result.data.maxLeverage > 10) {
+    result.data.maxLeverage = 10;
   }
 
   _tradingConfig = result.data;

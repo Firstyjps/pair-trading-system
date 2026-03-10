@@ -491,6 +491,21 @@ async function main() {
       logger.info({ pair, signalId }, 'Auto-trading disabled in config — skipping order placement');
       return;
     }
+
+    // Daily loss kill switch
+    if (config.maxDailyLossUsd > 0) {
+      const todayCutoff = new Date();
+      todayCutoff.setHours(0, 0, 0, 0);
+      const dailyStats = queries.getRealizedPnlSince(todayCutoff.toISOString());
+      if (dailyStats.total < 0 && Math.abs(dailyStats.total) >= config.maxDailyLossUsd) {
+        logger.warn({ dailyLoss: dailyStats.total, limit: config.maxDailyLossUsd }, 'Daily loss limit reached — kill switch activated');
+        await notifications.errorAlert(
+          `🛑 Daily loss limit reached: $${Math.abs(dailyStats.total).toFixed(2)} >= $${config.maxDailyLossUsd} — auto-trading paused`,
+          'kill-switch',
+        );
+        return;
+      }
+    }
     const [symbolA, symbolB] = pair.split('/');
     const instrumentA = `${symbolA}-USDT-SWAP`;
     const instrumentB = `${symbolB}-USDT-SWAP`;
@@ -745,14 +760,24 @@ async function main() {
   const reconIntervalMs = tradingConfig.reconciliationIntervalMs;
   logger.info({ intervalMs: reconIntervalMs }, 'Starting reconciliation');
 
+  let lastReconSignature = '';
   const reconInterval = setInterval(async () => {
     try {
       const discrepancies = await reconcile(queries, exchangeAdapter);
       if (discrepancies.length > 0) {
-        await notifications.errorAlert(
-          `Reconciliation: ${discrepancies.length} discrepancies found`,
-          'reconciliation',
-        );
+        // Dedup: only alert if discrepancies changed (different symbols/types)
+        const signature = discrepancies.map(d => `${d.type}:${d.symbol}`).sort().join('|');
+        if (signature !== lastReconSignature) {
+          lastReconSignature = signature;
+          await notifications.errorAlert(
+            `Reconciliation: ${discrepancies.length} discrepancies found`,
+            'reconciliation',
+          );
+        } else {
+          logger.debug({ count: discrepancies.length }, 'Reconciliation discrepancies unchanged — skipping alert');
+        }
+      } else {
+        lastReconSignature = '';
       }
     } catch (err) {
       logger.error({ error: err }, 'Reconciliation error');
@@ -765,11 +790,59 @@ async function main() {
   const ORPHAN_CHECK_MS = 600_000; // Check every 10 minutes
   logger.info({ intervalMs: ORPHAN_CHECK_MS }, 'Starting orphan detector');
 
+  let lastOrphanSignature = '';
+  const orphanFirstSeen = new Map<string, number>(); // symbol → timestamp first detected
   const orphanInterval = setInterval(async () => {
     try {
       const orphans = await detectOrphans(queries, exchangeAdapter);
+      const config = getTradingConfig();
+
       if (orphans.length > 0) {
-        await notifications.orphanAlert(orphans);
+        // Dedup: only alert if orphan set changed
+        const signature = orphans.map(o => `${o.symbol}:${o.side}:${o.size}`).sort().join('|');
+        if (signature !== lastOrphanSignature) {
+          lastOrphanSignature = signature;
+          await notifications.orphanAlert(orphans);
+        } else {
+          logger.debug({ count: orphans.length }, 'Orphan positions unchanged — skipping alert');
+        }
+
+        // Auto-close orphans if configured
+        if (config.orphanAutoCloseAfterMs > 0) {
+          const now = Date.now();
+          for (const orphan of orphans) {
+            if (!orphanFirstSeen.has(orphan.symbol)) {
+              orphanFirstSeen.set(orphan.symbol, now);
+            }
+            const firstSeen = orphanFirstSeen.get(orphan.symbol)!;
+            const elapsed = now - firstSeen;
+
+            if (elapsed >= config.orphanAutoCloseAfterMs) {
+              logger.warn({ symbol: orphan.symbol, elapsedMs: elapsed }, 'Auto-closing orphan position');
+              try {
+                const closeSide = orphan.side === 'long' ? 'sell' : 'buy';
+                await exchangeAdapter.closePosition(orphan.symbol, closeSide as 'buy' | 'sell', orphan.size);
+                orphanFirstSeen.delete(orphan.symbol);
+                await notifications.errorAlert(
+                  `🧹 Orphan auto-closed: ${orphan.symbol} ${orphan.side} ${orphan.size} (PnL: ${orphan.unrealizedPnl.toFixed(2)})`,
+                  'orphan-auto-close',
+                );
+              } catch (closeErr) {
+                logger.error({ symbol: orphan.symbol, error: closeErr }, 'Failed to auto-close orphan');
+                await notifications.errorAlert(
+                  `Failed to auto-close orphan ${orphan.symbol}: ${closeErr}`,
+                  'orphan-auto-close',
+                );
+              }
+            } else {
+              const remainingMin = Math.round((config.orphanAutoCloseAfterMs - elapsed) / 60000);
+              logger.info({ symbol: orphan.symbol, remainingMin }, 'Orphan tracked — will auto-close soon');
+            }
+          }
+        }
+      } else {
+        lastOrphanSignature = '';
+        orphanFirstSeen.clear();
       }
     } catch (err) {
       logger.error({ error: err }, 'Orphan detector error');

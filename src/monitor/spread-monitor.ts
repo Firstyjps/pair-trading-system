@@ -9,6 +9,7 @@ const log = createChildLogger('spread-monitor');
 
 export interface SpreadMonitorExchange {
   fetchTicker(symbol: string): Promise<{ last: number }>;
+  getContractSize(symbol: string): Promise<number>;
 }
 
 export interface SpreadUpdate {
@@ -74,8 +75,34 @@ export async function checkSpreads(
 
       if (shouldTriggerTakeProfit(zScore, config.exitZScore)) {
         if (positionAge >= minHoldMs) {
-          action = 'EXIT_TP';
-          log.info({ pair: pos.pair, zScore, exitZ: config.exitZScore }, 'Take profit triggered');
+          // Estimate PnL before closing — don't TP if we'd lose money after fees
+          const entryA = pos.leg_a_entry_price ?? 0;
+          const entryB = pos.leg_b_entry_price ?? 0;
+          if (entryA > 0 && entryB > 0) {
+            const ctValA = await exchange.getContractSize(pos.leg_a_symbol);
+            const ctValB = await exchange.getContractSize(pos.leg_b_symbol);
+            const mulA = pos.leg_a_side === 'buy' ? 1 : -1;
+            const mulB = pos.leg_b_side === 'buy' ? 1 : -1;
+            const pnlA = (tickerA.last - entryA) * pos.leg_a_size * ctValA * mulA;
+            const pnlB = (tickerB.last - entryB) * pos.leg_b_size * ctValB * mulB;
+            const grossPnl = pnlA + pnlB;
+            const notionalA = tickerA.last * pos.leg_a_size * ctValA;
+            const notionalB = tickerB.last * pos.leg_b_size * ctValB;
+            const estFees = (notionalA + notionalB) * (config.feeRate ?? 0.0006) * 2;
+            const netPnl = grossPnl - estFees;
+
+            if (netPnl <= 0) {
+              log.info({
+                pair: pos.pair, zScore, grossPnl: grossPnl.toFixed(4), estFees: estFees.toFixed(4), netPnl: netPnl.toFixed(4),
+              }, 'TP conditions met but estimated PnL negative after fees — holding');
+            } else {
+              action = 'EXIT_TP';
+              log.info({ pair: pos.pair, zScore, netPnl: netPnl.toFixed(4), exitZ: config.exitZScore }, 'Take profit triggered (profitable after fees)');
+            }
+          } else {
+            action = 'EXIT_TP';
+            log.info({ pair: pos.pair, zScore, exitZ: config.exitZScore }, 'Take profit triggered (no entry price to estimate)');
+          }
         } else {
           log.info({
             pair: pos.pair, zScore,
