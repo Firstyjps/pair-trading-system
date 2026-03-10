@@ -135,7 +135,7 @@ export class NotificationService {
         `🔴 ${position.pair} (${position.direction === 'SHORT_SPREAD' ? 'short' : 'long'}): $${pnl.toFixed(2)}`,
         '─── สรุป ───',
         `กำไร/ขาดทุนรวม: ${realized.total >= 0 ? '+' : ''}$${realized.total.toFixed(2)}`,
-        `⏰ ${new Date().toLocaleString('th-TH')}`,
+        `⏰ ${new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })}`,
       ].join('\n');
       await this.send('CLOSED_SHORT', shortMsg, `${position.pair}:CLOSED_SHORT:${Math.floor(Date.now() / 60000)}`);
     }

@@ -7,16 +7,18 @@ function toBaseSymbol(instrument: string): string {
   return instrument.replace('-USDT-SWAP', '');
 }
 
-/** Format Thai Buddhist date: D/M/YYYY HH:mm:ss */
+/** Format Thai Buddhist date: D/M/YYYY HH:mm:ss (Asia/Bangkok) */
 function formatThaiTimestamp(): string {
   const d = new Date();
-  const day = d.getDate();
-  const month = d.getMonth() + 1;
-  const year = d.getFullYear() + 543;
-  const h = d.getHours().toString().padStart(2, '0');
-  const m = d.getMinutes().toString().padStart(2, '0');
-  const s = d.getSeconds().toString().padStart(2, '0');
-  return `${day}/${month}/${year} ${h}:${m}:${s}`;
+  const bkk = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Bangkok',
+    day: 'numeric', month: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => bkk.find(p => p.type === t)?.value ?? '';
+  const year = parseInt(get('year'), 10) + 543;
+  return `${get('day')}/${get('month')}/${year} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 export interface PnlReportData {
