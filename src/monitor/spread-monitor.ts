@@ -88,7 +88,7 @@ export async function checkSpreads(
             const grossPnl = pnlA + pnlB;
             const notionalA = tickerA.last * pos.leg_a_size * ctValA;
             const notionalB = tickerB.last * pos.leg_b_size * ctValB;
-            const estFees = (notionalA + notionalB) * (config.feeRate ?? 0.0006) * 2;
+            const estFees = (notionalA + notionalB) * (config.takerFeeRate ?? config.feeRate ?? 0.0006) * 2;
             const netPnl = grossPnl - estFees;
 
             if (netPnl <= 0) {
@@ -115,11 +115,13 @@ export async function checkSpreads(
         log.warn({ pair: pos.pair, zScore, slZ: config.stopLossZScore }, 'Stop loss triggered');
       } else if (config.trailingStopEnabled && config.trailingStopZ > 0) {
         const absZ = Math.abs(zScore);
-        let bestZ = absZ;
+        // Initialize trailingBestZ from entry Z (not current Z) so we track from the start
+        const entryAbsZ = Math.abs(pos.entry_z_score);
+        let bestZ: number;
         try {
           const meta = pos.metadata ? JSON.parse(pos.metadata) : {};
-          bestZ = Math.min(meta.trailingBestZ ?? absZ, absZ);
-        } catch { /* use absZ */ }
+          bestZ = Math.min(meta.trailingBestZ ?? entryAbsZ, absZ);
+        } catch { bestZ = Math.min(entryAbsZ, absZ); }
         if (absZ >= bestZ + config.trailingStopZ) {
           action = 'EXIT_TRAILING';
           log.info({ pair: pos.pair, zScore, bestZ, trailZ: config.trailingStopZ }, 'Trailing stop triggered');

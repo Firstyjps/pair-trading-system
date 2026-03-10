@@ -513,6 +513,27 @@ async function main() {
         return;
       }
     }
+
+    // Circuit breaker — pause after N consecutive losses
+    if (config.circuitBreakerLosses > 0) {
+      const consecutiveLosses = queries.getConsecutiveLosses();
+      if (consecutiveLosses >= config.circuitBreakerLosses) {
+        // Check cooldown: use last closed position's timestamp
+        const lastClosed = queries.getClosedPositions(1);
+        const lastClosedAt = lastClosed[0]?.closed_at ? new Date(lastClosed[0].closed_at).getTime() : 0;
+        const cooldownEnd = lastClosedAt + config.circuitBreakerCooldownMs;
+        if (Date.now() < cooldownEnd) {
+          const remainMin = Math.ceil((cooldownEnd - Date.now()) / 60000);
+          logger.warn({ consecutiveLosses, remainMin }, 'Circuit breaker active — skipping trade');
+          await notifications.errorAlert(
+            `⚡ Circuit breaker: ${consecutiveLosses} consecutive losses — paused for ${remainMin} min`,
+            'circuit-breaker',
+          );
+          return;
+        }
+      }
+    }
+
     const [symbolA, symbolB] = pair.split('/');
     const instrumentA = `${symbolA}-USDT-SWAP`;
     const instrumentB = `${symbolB}-USDT-SWAP`;

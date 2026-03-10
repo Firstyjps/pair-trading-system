@@ -48,8 +48,12 @@ const TradingConfigSchema = z.object({
   minHoldBarsTP: z.number().int().min(0).default(3),
   /** Minimum expected profit as multiple of fees before entering (e.g. 2.0 = need 2x fees profit) */
   minProfitMultiplier: z.number().min(0).default(2.0),
-  /** Fee rate per side (entry + exit = 2x this) */
+  /** Fee rate per side (entry + exit = 2x this). Used as taker rate when makerFeeRate is not set. */
   feeRate: z.number().min(0).default(0.0006),
+  /** Maker fee rate (limit orders). If not set, feeRate is used. */
+  makerFeeRate: z.number().min(0).optional(),
+  /** Taker fee rate (market orders). If not set, feeRate is used. */
+  takerFeeRate: z.number().min(0).optional(),
 
   // Daily loss kill switch — stop trading if daily realized loss exceeds this (0 = disabled)
   maxDailyLossUsd: z.number().min(0).default(0),
