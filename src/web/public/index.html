@@ -42,6 +42,7 @@
       <button class="nav-badge nav-badge-yellow" data-page="backtest">BT</button>
       <button class="nav-badge nav-badge-orange" data-page="logs">LOG</button>
       <button class="nav-badge nav-badge-red" data-page="orders">ORP</button>
+      <button class="nav-badge nav-badge-cyan" data-page="analytics">ANA</button>
     </div>
     <div class="nav-right">
       <span class="status-info" id="auto-sched-info">LAST: — | EVERY: —</span>
@@ -365,6 +366,35 @@
     <div class="settings-actions">
       <button class="btn-terminal btn-primary" onclick="saveConfig()">SAVE CONFIG</button>
       <button class="btn-terminal" onclick="resetConfigToDefault()">RESET DEFAULTS</button>
+    </div>
+  </section>
+
+  <!-- ═══ PAGE: ANALYTICS ═══ -->
+  <section id="page-analytics" class="page">
+    <div class="page-header">
+      <h1>ANALYTICS</h1>
+      <p class="subtitle">Performance breakdown, equity curve, and drawdown analysis</p>
+    </div>
+    <div class="grid-2col">
+      <div class="card">
+        <h3>Equity Curve</h3>
+        <div class="chart-container"><canvas id="equity-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>Drawdown</h3>
+        <div class="chart-container"><canvas id="drawdown-chart"></canvas></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:1rem">
+      <h3>PnL by Pair</h3>
+      <div class="chart-container"><canvas id="per-pair-chart"></canvas></div>
+    </div>
+    <div class="card" style="margin-top:1rem">
+      <h3>Per-Pair Breakdown</h3>
+      <table class="data-table" id="per-pair-table">
+        <thead><tr><th>Pair</th><th>Total PnL</th><th>Trades</th><th>Wins</th><th>Win Rate</th><th>Avg PnL</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </section>
 

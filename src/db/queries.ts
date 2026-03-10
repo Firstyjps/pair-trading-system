@@ -155,6 +155,31 @@ export class TradingQueries {
     return row;
   }
 
+  getRealizedPnlByPair(): Array<{ pair: string; totalPnl: number; trades: number; wins: number; avgPnl: number }> {
+    return this.db.prepare(`
+      SELECT
+        pair,
+        COALESCE(SUM(pnl), 0) as totalPnl,
+        COUNT(*) as trades,
+        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+        COALESCE(AVG(pnl), 0) as avgPnl
+      FROM positions
+      WHERE state = 'CLOSED' AND pnl IS NOT NULL
+      GROUP BY pair
+      ORDER BY totalPnl DESC
+    `).all() as Array<{ pair: string; totalPnl: number; trades: number; wins: number; avgPnl: number }>;
+  }
+
+  getEquityCurve(): Array<{ closed_at: string; pnl: number; cumPnl: number }> {
+    const rows = this.db.prepare(`
+      SELECT closed_at, pnl FROM positions
+      WHERE state = 'CLOSED' AND pnl IS NOT NULL AND closed_at IS NOT NULL
+      ORDER BY closed_at ASC
+    `).all() as Array<{ closed_at: string; pnl: number }>;
+    let cum = 0;
+    return rows.map(r => { cum += r.pnl; return { closed_at: r.closed_at, pnl: r.pnl, cumPnl: cum }; });
+  }
+
   getConsecutiveLosses(): number {
     const closed = this.db.prepare(
       `SELECT pnl FROM positions WHERE state = 'CLOSED' AND pnl IS NOT NULL ORDER BY closed_at DESC LIMIT 20`

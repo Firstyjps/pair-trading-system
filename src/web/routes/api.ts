@@ -216,6 +216,55 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
     }
   });
 
+  // ─── Detailed Health Check ───
+  router.get('/health/detailed', async (_req: Request, res: Response) => {
+    try {
+      const mem = process.memoryUsage();
+      const openCount = queries.getOpenPositionCount();
+      const pnl = queries.getRealizedPnl();
+      const consecutiveLosses = queries.getConsecutiveLosses();
+
+      // Check exchange connectivity
+      let exchangeOk = false;
+      if (exchange) {
+        try {
+          await exchange.fetchBalance();
+          exchangeOk = true;
+        } catch { exchangeOk = false; }
+      }
+
+      // DB health: quick query
+      let dbOk = false;
+      try {
+        queries.getOpenPositions();
+        dbOk = true;
+      } catch { dbOk = false; }
+
+      res.json({
+        status: exchangeOk && dbOk ? 'healthy' : 'degraded',
+        uptime: process.uptime(),
+        memory: {
+          rss: Math.round(mem.rss / 1024 / 1024),
+          heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+          heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+        },
+        subsystems: {
+          exchange: exchangeOk ? 'ok' : 'down',
+          database: dbOk ? 'ok' : 'down',
+        },
+        trading: {
+          openPositions: openCount,
+          totalTrades: pnl.count,
+          realizedPnl: pnl.total,
+          consecutiveLosses,
+          winRate: pnl.count > 0 ? (pnl.wins / pnl.count * 100).toFixed(1) + '%' : 'N/A',
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ status: 'error', error: String(err) });
+    }
+  });
+
   // ─── Export CSV ───
   router.get('/export/trades.csv', (req: Request, res: Response) => {
     try {
@@ -935,6 +984,26 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
       });
     } catch (err) {
       log.error({ error: err }, 'Error in /account/stats');
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ─── Analytics: Per-pair PnL ───
+  router.get('/analytics/per-pair', (_req: Request, res: Response) => {
+    try {
+      res.json(queries.getRealizedPnlByPair());
+    } catch (err) {
+      log.error({ error: err }, 'Error in /analytics/per-pair');
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ─── Analytics: Equity Curve ───
+  router.get('/analytics/equity-curve', (_req: Request, res: Response) => {
+    try {
+      res.json(queries.getEquityCurve());
+    } catch (err) {
+      log.error({ error: err }, 'Error in /analytics/equity-curve');
       res.status(500).json({ error: String(err) });
     }
   });

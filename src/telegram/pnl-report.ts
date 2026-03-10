@@ -84,6 +84,19 @@ export function buildPnLReport(
     lines.push('(ไม่มีออเดอร์เปิดอยู่)');
   }
 
+  // ─── ผลงานรายคู่ ───
+  const perPair = queries.getRealizedPnlByPair();
+  if (perPair.length > 0) {
+    lines.push('');
+    lines.push('─── ผลงานรายคู่ ───');
+    for (const p of perPair.slice(0, 5)) {
+      const emoji = p.totalPnl >= 0 ? '🟢' : '🔴';
+      const sign = p.totalPnl >= 0 ? '+' : '';
+      const wr = p.trades > 0 ? ((p.wins / p.trades) * 100).toFixed(0) : '0';
+      lines.push(`${emoji} ${p.pair}: ${sign}$${p.totalPnl.toFixed(2)} (${p.trades} trades, WR ${wr}%)`);
+    }
+  }
+
   // ─── สรุป ───
   const totalUnrealized = data.exchangePositions
     .filter(p => p.size > 0)

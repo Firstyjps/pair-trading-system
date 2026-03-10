@@ -105,6 +105,7 @@ function switchPage(page) {
   if (page === 'auto') { loadAutoPage(); }
   if (page === 'logs') { loadLogsPage(); }
   if (page === 'orders') { loadOrdersPage(); }
+  if (page === 'analytics') { loadAnalyticsPage(); }
 }
 
 // Portfolio chart range buttons
@@ -1518,6 +1519,76 @@ async function loadOrdersPage() {
       <td>${statusHtml}</td>
     </tr>`;
   }).join('');
+}
+
+// ═══════════════════════════════════════════════
+//  ANALYTICS PAGE
+// ═══════════════════════════════════════════════
+
+let equityChart = null, drawdownChart = null, perPairChart = null;
+
+async function loadAnalyticsPage() {
+  try {
+    const [curveRes, pairRes] = await Promise.all([
+      fetch('/api/analytics/equity-curve').then(r => r.json()),
+      fetch('/api/analytics/per-pair').then(r => r.json()),
+    ]);
+
+    // Equity Curve
+    const labels = curveRes.map(r => r.closed_at ? new Date(r.closed_at).toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok' }) : '');
+    const cumData = curveRes.map(r => r.cumPnl);
+    if (equityChart) equityChart.destroy();
+    const eCtx = document.getElementById('equity-chart');
+    if (eCtx) {
+      equityChart = new Chart(eCtx, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Cumulative PnL ($)', data: cumData, borderColor: C.cyan, backgroundColor: C.cyan + '22', fill: true, tension: 0.3, pointRadius: 2 }] },
+        options: { ...CHART_DEFAULTS, plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } } },
+      });
+    }
+
+    // Drawdown
+    let peak = 0, ddData = [];
+    for (const r of curveRes) {
+      if (r.cumPnl > peak) peak = r.cumPnl;
+      ddData.push(r.cumPnl - peak);
+    }
+    if (drawdownChart) drawdownChart.destroy();
+    const dCtx = document.getElementById('drawdown-chart');
+    if (dCtx) {
+      drawdownChart = new Chart(dCtx, {
+        type: 'line',
+        data: { labels, datasets: [{ label: 'Drawdown ($)', data: ddData, borderColor: C.red, backgroundColor: C.red + '22', fill: true, tension: 0.3, pointRadius: 2 }] },
+        options: { ...CHART_DEFAULTS, plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } } },
+      });
+    }
+
+    // Per-Pair Bar Chart
+    if (perPairChart) perPairChart.destroy();
+    const pCtx = document.getElementById('per-pair-chart');
+    if (pCtx && pairRes.length > 0) {
+      perPairChart = new Chart(pCtx, {
+        type: 'bar',
+        data: {
+          labels: pairRes.map(p => p.pair),
+          datasets: [{ label: 'PnL ($)', data: pairRes.map(p => p.totalPnl), backgroundColor: pairRes.map(p => p.totalPnl >= 0 ? C.green + 'cc' : C.red + 'cc') }],
+        },
+        options: { ...CHART_DEFAULTS, plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } } },
+      });
+    }
+
+    // Per-Pair Table
+    const tbody = document.querySelector('#per-pair-table tbody');
+    if (tbody) {
+      tbody.innerHTML = pairRes.map(p => {
+        const wr = p.trades > 0 ? ((p.wins / p.trades) * 100).toFixed(1) : '0.0';
+        const cls = p.totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+        return `<tr><td>${p.pair}</td><td class="${cls}">$${p.totalPnl.toFixed(2)}</td><td>${p.trades}</td><td>${p.wins}</td><td>${wr}%</td><td>$${p.avgPnl.toFixed(2)}</td></tr>`;
+      }).join('');
+    }
+  } catch (err) {
+    console.error('Analytics load error:', err);
+  }
 }
 
 // ═══════════════════════════════════════════════
