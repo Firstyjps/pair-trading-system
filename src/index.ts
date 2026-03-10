@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import { v4 as uuid } from 'uuid';
+import fs from 'fs';
+import path from 'path';
 import { initializeDatabase } from './db/schema.js';
 import { runMigrations } from './db/migrations.js';
 import { TradingQueries } from './db/queries.js';
@@ -791,7 +793,25 @@ async function main() {
   logger.info({ intervalMs: ORPHAN_CHECK_MS }, 'Starting orphan detector');
 
   let lastOrphanSignature = '';
+  // Persist orphanFirstSeen to file so it survives PM2 restarts
+  const orphanTrackingFile = path.resolve(path.dirname(envConfig.DB_PATH), 'orphan-tracking.json');
   const orphanFirstSeen = new Map<string, number>(); // symbol → timestamp first detected
+  // Load from file on startup
+  try {
+    if (fs.existsSync(orphanTrackingFile)) {
+      const data = JSON.parse(fs.readFileSync(orphanTrackingFile, 'utf-8'));
+      for (const [symbol, ts] of Object.entries(data)) {
+        orphanFirstSeen.set(symbol, ts as number);
+      }
+      logger.info({ count: orphanFirstSeen.size }, 'Loaded orphan tracking from disk');
+    }
+  } catch { /* start fresh if corrupted */ }
+  const saveOrphanTracking = () => {
+    try {
+      const obj = Object.fromEntries(orphanFirstSeen);
+      fs.writeFileSync(orphanTrackingFile, JSON.stringify(obj), 'utf-8');
+    } catch { /* best-effort */ }
+  };
   const orphanInterval = setInterval(async () => {
     try {
       const orphans = await detectOrphans(queries, exchangeAdapter);
@@ -813,6 +833,7 @@ async function main() {
           for (const orphan of orphans) {
             if (!orphanFirstSeen.has(orphan.symbol)) {
               orphanFirstSeen.set(orphan.symbol, now);
+              saveOrphanTracking();
             }
             const firstSeen = orphanFirstSeen.get(orphan.symbol)!;
             const elapsed = now - firstSeen;
@@ -823,6 +844,7 @@ async function main() {
                 const closeSide = orphan.side === 'long' ? 'sell' : 'buy';
                 await exchangeAdapter.closePosition(orphan.symbol, closeSide as 'buy' | 'sell', orphan.size);
                 orphanFirstSeen.delete(orphan.symbol);
+                saveOrphanTracking();
                 await notifications.errorAlert(
                   `🧹 Orphan auto-closed: ${orphan.symbol} ${orphan.side} ${orphan.size} (PnL: ${orphan.unrealizedPnl.toFixed(2)})`,
                   'orphan-auto-close',
@@ -843,6 +865,7 @@ async function main() {
       } else {
         lastOrphanSignature = '';
         orphanFirstSeen.clear();
+        saveOrphanTracking();
       }
     } catch (err) {
       logger.error({ error: err }, 'Orphan detector error');
