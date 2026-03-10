@@ -275,6 +275,11 @@ async function main() {
         priceCache.set(baseName, candles.map(c => c.close));
       }
 
+      // Cleanup stale symbols no longer in scan universe
+      for (const key of priceCache.keys()) {
+        if (!priceData.has(key)) priceCache.delete(key);
+      }
+
       // Step 4: Build correlation matrix
       const correlatedPairs = buildCorrelationMatrix(priceData, config.correlationThreshold);
       const taggedPairs = tagSectors(correlatedPairs);
@@ -837,7 +842,9 @@ async function main() {
   const saveOrphanTracking = () => {
     try {
       const obj = Object.fromEntries(orphanFirstSeen);
-      fs.writeFileSync(orphanTrackingFile, JSON.stringify(obj), 'utf-8');
+      const tmpFile = orphanTrackingFile + '.tmp';
+      fs.writeFileSync(tmpFile, JSON.stringify(obj), 'utf-8');
+      fs.renameSync(tmpFile, orphanTrackingFile);
     } catch { /* best-effort */ }
   };
   const orphanInterval = setInterval(async () => {

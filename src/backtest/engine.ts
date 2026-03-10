@@ -80,8 +80,8 @@ export function runBacktest(
   let cooldownUntil = 0;
   let gracePeriodEnd = 0;
 
-  // Rolling Z-Score calculation — use config lookback (default 168)
-  const window = Math.min(config.halfLifeFilter || 168, Math.floor(n * 0.8));
+  // Rolling Z-Score calculation — use halfLifeFilter as window (aligned with live lookbackPeriods)
+  const window = Math.min(config.halfLifeFilter || 120, Math.floor(n * 0.8));
 
   for (let i = window; i < n; i++) {
     // Calculate Z-Score using rolling window

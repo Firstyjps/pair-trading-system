@@ -230,7 +230,7 @@ export async function closePairPosition(
     // Deduct estimated fees (taker 0.06% per trade, 4 trades total: open + close for each leg)
     const notionalA = (exitPriceA > 0 ? exitPriceA : entryA) * sizeA * ctValA;
     const notionalB = (exitPriceB > 0 ? exitPriceB : entryB) * sizeB * ctValB;
-    const feeRate = 0.0006;
+    const feeRate = getTradingConfig().feeRate;
     totalPnl -= (notionalA + notionalB) * feeRate * 2; // open + close
 
     log.info({

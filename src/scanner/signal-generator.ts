@@ -76,6 +76,7 @@ export function generateSignals(
       pair.pricesA,
       pair.pricesB,
       pair.coint.beta,
+      config.lookbackPeriods,
     );
 
     const absZ = Math.abs(zScore);
