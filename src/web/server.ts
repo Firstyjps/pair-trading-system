@@ -13,7 +13,7 @@ import { logger } from '../logger.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = parseInt(process.env.WEB_PORT ?? '3000', 10);
+const PORT = parseInt(process.env.WEB_PORT ?? process.env.PORT ?? '3000', 10);
 
 // Resolve paths to absolute (Fix #10)
 const rawDbPath = process.env.DB_PATH ?? './data/trading.db';

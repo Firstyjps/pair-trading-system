@@ -585,6 +585,34 @@ async function main() {
         return;
       }
 
+      // ── Pre-trade margin check ──
+      // Ensure available USDT covers both legs before placing any orders
+      try {
+        const balance = await exchangeAdapter.fetchBalance();
+        const requiredMargin = (sizing.legANotional + sizing.legBNotional) / config.maxLeverage;
+        const safetyBuffer = 1.05; // 5% buffer for fees + slippage
+        const requiredWithBuffer = requiredMargin * safetyBuffer;
+
+        if (balance.availableBalance < requiredWithBuffer) {
+          logger.warn({
+            pair,
+            availableBalance: balance.availableBalance.toFixed(2),
+            requiredMargin: requiredWithBuffer.toFixed(2),
+            legANotional: sizing.legANotional.toFixed(2),
+            legBNotional: sizing.legBNotional.toFixed(2),
+          }, 'Insufficient margin — skipping trade');
+          await notifications.errorAlert(
+            `⚠️ Insufficient margin for ${pair}: need $${requiredWithBuffer.toFixed(2)} but only $${balance.availableBalance.toFixed(2)} available`,
+            'margin-check',
+          );
+          return;
+        }
+        logger.info({ pair, available: balance.availableBalance.toFixed(2), required: requiredWithBuffer.toFixed(2) }, 'Margin check passed');
+      } catch (balanceErr) {
+        logger.error({ pair, error: balanceErr }, 'Failed to check balance — skipping trade for safety');
+        return;
+      }
+
       // Determine sides based on direction
       // SHORT_SPREAD: sell A, buy B
       // LONG_SPREAD: buy A, sell B
