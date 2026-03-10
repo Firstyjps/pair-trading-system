@@ -219,6 +219,7 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
   // ─── Detailed Health Check ───
   router.get('/health/detailed', async (_req: Request, res: Response) => {
     try {
+      const config = getTradingConfig();
       const mem = process.memoryUsage();
       const openCount = queries.getOpenPositionCount();
       const pnl = queries.getRealizedPnl();
@@ -258,6 +259,12 @@ export function createApiRouter(queries: TradingQueries, exchange?: OkxAdapter |
           realizedPnl: pnl.total,
           consecutiveLosses,
           winRate: pnl.count > 0 ? (pnl.wins / pnl.count * 100).toFixed(1) + '%' : 'N/A',
+        },
+        features: {
+          kalmanFilter: config.useKalmanFilter,
+          dynamicLeverage: config.useDynamicLeverage,
+          crossPairRisk: config.crossPairRiskEnabled,
+          dbCleanup: config.dbCleanupIntervalMs > 0,
         },
       });
     } catch (err) {

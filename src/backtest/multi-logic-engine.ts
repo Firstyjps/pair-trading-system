@@ -32,7 +32,7 @@ export interface StrategyTrade {
   exitSpread: number;
   pnl: number;
   pnlPercent: number;
-  closeReason: 'TP' | 'SL';
+  closeReason: 'TP' | 'SL' | 'TRAILING';
   barsHeld: number;
 }
 

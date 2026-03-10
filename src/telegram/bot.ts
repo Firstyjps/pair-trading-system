@@ -61,6 +61,7 @@ export function createTelegramBot(
   botAdapter.onCommand('pnlreport', (ctx) => commands.pnlreport(ctx, callbacks?.onPnlReport));
   botAdapter.onCommand('trades', (ctx, ...args) => commands.trades(ctx, args[0], callbacks?.onTrades));
   botAdapter.onCommand('alert', (ctx, ...args) => commands.alert(ctx, args[0], args[1], args[2], args[3]));
+  botAdapter.onCommand('tune', (ctx, ...args) => commands.tune(ctx, args[0]));
   botAdapter.onCommand('orphans', (ctx) => commands.orphans(ctx));
 
   // Register singleton (RULE 5)

@@ -350,15 +350,17 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Show top pairs
-    console.log(`\n📊 Top correlated pairs:`);
-    for (const p of pairs.slice(0, 10)) {
+    // Show a preview of correlated pairs (top by correlation)
+    console.log(`\n📊 Sample of correlated pairs (top by correlation):`);
+    for (const p of pairs.slice(0, Math.min(10, pairs.length))) {
       console.log(`  ${p.symbolA}/${p.symbolB}: ${p.correlation.toFixed(4)}`);
     }
     console.log(``);
 
-    // Backtest top 5 pairs
-    const topPairs = pairs.slice(0, 5);
+    // Randomly sample up to opts.top pairs for backtest
+    const sampleSize = Math.min(opts.top, pairs.length);
+    const shuffled = [...pairs].sort(() => Math.random() - 0.5);
+    const topPairs = shuffled.slice(0, sampleSize);
 
     for (const pair of topPairs) {
       console.log(`\n${'═'.repeat(60)}`);

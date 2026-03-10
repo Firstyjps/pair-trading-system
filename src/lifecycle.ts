@@ -12,6 +12,7 @@ interface SystemInstances {
   spreadMonitor: ReturnType<typeof setInterval> | null;
   scannerInterval: ReturnType<typeof setInterval> | null;
   pnlReport: ReturnType<typeof setInterval> | null;
+  dbCleanup: ReturnType<typeof setInterval> | null;
   startupTime: number;
 }
 

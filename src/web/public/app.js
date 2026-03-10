@@ -1603,4 +1603,131 @@ async function loadAnalyticsPage() {
 
   // Periodic status bar refresh
   setInterval(updateStatusBar, 60000);
+
+  // WebSocket real-time connection
+  initWebSocket();
 })();
+
+// ═══════════════════════════════════════════════
+//  WEBSOCKET REAL-TIME
+// ═══════════════════════════════════════════════
+
+function initWebSocket() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}`;
+  let ws = null;
+  let reconnectDelay = 1000;
+  const maxReconnectDelay = 30000;
+
+  function connect() {
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+
+    ws.onopen = () => {
+      console.log('[WS] Connected');
+      reconnectDelay = 1000;
+      updateWsIndicator(true);
+    };
+
+    ws.onclose = () => {
+      console.log('[WS] Disconnected');
+      updateWsIndicator(false);
+      scheduleReconnect();
+    };
+
+    ws.onerror = () => {
+      // onclose will fire after this
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        handleWsEvent(msg);
+      } catch (e) {
+        console.warn('[WS] Parse error:', e);
+      }
+    };
+  }
+
+  function scheduleReconnect() {
+    setTimeout(() => {
+      reconnectDelay = Math.min(reconnectDelay * 1.5, maxReconnectDelay);
+      connect();
+    }, reconnectDelay);
+  }
+
+  function updateWsIndicator(connected) {
+    const el = $('#ws-status');
+    if (el) {
+      el.textContent = connected ? 'LIVE' : 'OFFLINE';
+      el.className = connected ? 'ws-live' : 'ws-offline';
+    }
+  }
+
+  connect();
+}
+
+function handleWsEvent(msg) {
+  switch (msg.type) {
+    case 'scanner:update':
+      // Refresh scanner data immediately
+      if (state.currentPage === 'scanner') {
+        loadScannerMetrics();
+        loadScannerPairs();
+      }
+      break;
+
+    case 'position:update':
+      // Refresh positions on portfolio page
+      if (state.currentPage === 'portfolio') {
+        loadPortfolioPage();
+      }
+      // Also refresh scanner metrics (active count may change)
+      if (state.currentPage === 'scanner') {
+        loadScannerMetrics();
+      }
+      break;
+
+    case 'position:opened':
+    case 'position:closed':
+      // Refresh relevant pages
+      if (state.currentPage === 'scanner') {
+        loadScannerMetrics();
+        loadScannerPairs();
+        loadScannerTradeHistory();
+      }
+      if (state.currentPage === 'portfolio') {
+        loadPortfolioPage();
+      }
+      if (state.currentPage === 'analytics') {
+        loadAnalyticsPage();
+      }
+      break;
+
+    case 'account:update':
+      if (state.currentPage === 'scanner') {
+        loadScannerOkxSummary();
+      }
+      if (state.currentPage === 'portfolio') {
+        loadPortfolioPage();
+      }
+      break;
+
+    case 'ticker:update':
+      if (msg.data && msg.data.tickers) {
+        renderTickerData(msg.data.tickers);
+      }
+      break;
+
+    case 'ping':
+      // Heartbeat — no action needed
+      break;
+
+    default:
+      console.log('[WS] Unknown event:', msg.type);
+  }
+}

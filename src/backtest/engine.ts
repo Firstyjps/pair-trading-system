@@ -17,6 +17,9 @@ export interface BacktestConfig {
   capitalPerLeg: number;
   leverage: number;
   feeRate: number;             // e.g., 0.0006 for 0.06%
+  minHoldBarsTP?: number;      // Min bars to hold before TP (default: 2)
+  trailingStopEnabled?: boolean;
+  trailingStopZ?: number;      // Z drift from best to trigger trailing exit
 }
 
 export interface BacktestTrade {
@@ -29,7 +32,7 @@ export interface BacktestTrade {
   exitSpread: number;
   pnl: number;
   pnlPercent: number;
-  closeReason: 'TP' | 'SL';
+  closeReason: 'TP' | 'SL' | 'TRAILING';
   barsHeld: number;
 }
 
@@ -79,6 +82,11 @@ export function runBacktest(
   let entrySpread = 0;
   let cooldownUntil = 0;
   let gracePeriodEnd = 0;
+  let trailingBestZ = 0;       // Track best (lowest) |Z| for trailing stop
+
+  const minHoldBars = config.minHoldBarsTP ?? 2;
+  const trailingEnabled = config.trailingStopEnabled ?? false;
+  const trailingStopZ = config.trailingStopZ ?? 1.5;
 
   // Rolling Z-Score calculation — use halfLifeFilter as window (aligned with live lookbackPeriods)
   const window = Math.min(config.halfLifeFilter || 120, Math.floor(n * 0.8));
@@ -103,6 +111,7 @@ export function runBacktest(
         entryZ = z;
         entrySpread = spread[i];
         gracePeriodEnd = i + config.gracePeriodBars;
+        trailingBestZ = Math.abs(z);
       } else if (z < -config.entryZ && Math.abs(z) < config.stopLossZ - config.safeZoneBuffer) {
         inPosition = true;
         direction = 'LONG_SPREAD';
@@ -110,18 +119,44 @@ export function runBacktest(
         entryZ = z;
         entrySpread = spread[i];
         gracePeriodEnd = i + config.gracePeriodBars;
+        trailingBestZ = Math.abs(z);
       }
     } else {
-      // Check exit conditions
-      let closeReason: 'TP' | 'SL' | null = null;
+      const barsHeld = i - entryBar;
+      const absZ = Math.abs(z);
 
-      // Take profit
-      if (Math.abs(z) <= config.exitZ) {
-        closeReason = 'TP';
+      // Update trailing best Z (lowest |Z| achieved = closest to mean)
+      if (absZ < trailingBestZ) {
+        trailingBestZ = absZ;
+      }
+
+      // Check exit conditions
+      let closeReason: 'TP' | 'SL' | 'TRAILING' | null = null;
+
+      // Take profit — must hold minHoldBars + check profitability (aligned with live)
+      if (absZ <= config.exitZ) {
+        if (barsHeld >= minHoldBars) {
+          // Profitability check: estimate PnL before closing
+          const spreadChange = spread[i] - entrySpread;
+          const pnlDirection = direction === 'SHORT_SPREAD' ? -1 : 1;
+          const rawPnl = pnlDirection * spreadChange * config.capitalPerLeg * config.leverage;
+          const fees = config.capitalPerLeg * config.leverage * 2 * config.feeRate * 2;
+          const netPnl = rawPnl - fees;
+
+          if (netPnl > 0) {
+            closeReason = 'TP';
+          }
+          // If netPnl <= 0, hold — don't close at a loss just because Z hit exit
+        }
+        // If barsHeld < minHoldBars, hold — too early
       }
       // Stop loss (respecting grace period)
-      else if (i >= gracePeriodEnd && Math.abs(z) > config.stopLossZ) {
+      else if (i >= gracePeriodEnd && absZ > config.stopLossZ) {
         closeReason = 'SL';
+      }
+      // Trailing stop — Z was converging but now bouncing back
+      else if (trailingEnabled && absZ >= trailingBestZ + trailingStopZ) {
+        closeReason = 'TRAILING';
       }
 
       if (closeReason) {
@@ -146,7 +181,7 @@ export function runBacktest(
           pnl,
           pnlPercent,
           closeReason,
-          barsHeld: i - entryBar,
+          barsHeld,
         });
 
         inPosition = false;

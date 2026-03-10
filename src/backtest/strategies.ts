@@ -12,7 +12,7 @@ import type { Direction } from '../types.js';
 export interface StrategySignal {
   action: 'ENTER' | 'EXIT' | 'NONE';
   direction?: Direction;
-  reason?: 'TP' | 'SL';
+  reason?: 'TP' | 'SL' | 'TRAILING';
 }
 
 export interface StrategyState {
@@ -125,8 +125,11 @@ export class ClassicZScoreStrategy implements Strategy {
     private safeZoneBuffer: number = 0.5,
     private gracePeriodBars: number = 5,
     private cooldownBars: number = 24,
+    private minHoldBarsTP: number = 2,
+    private trailingStopEnabled: boolean = false,
+    private trailingStopZ: number = 1.5,
   ) {
-    this.params = { entryZ, exitZ, stopLossZ, window, safeZoneBuffer, gracePeriodBars, cooldownBars };
+    this.params = { entryZ, exitZ, stopLossZ, window, safeZoneBuffer, gracePeriodBars, cooldownBars, minHoldBarsTP, trailingStopZ };
   }
 
   reset(): void {}
@@ -139,17 +142,43 @@ export class ClassicZScoreStrategy implements Strategy {
       if (bar < state.cooldownUntil) return { action: 'NONE' };
 
       if (z > this.entryZ && z < this.stopLossZ - this.safeZoneBuffer) {
+        state.custom.trailingBestZ = Math.abs(z);
         return { action: 'ENTER', direction: 'SHORT_SPREAD' };
       }
       if (z < -this.entryZ && Math.abs(z) < this.stopLossZ - this.safeZoneBuffer) {
+        state.custom.trailingBestZ = Math.abs(z);
         return { action: 'ENTER', direction: 'LONG_SPREAD' };
       }
     } else {
-      if (Math.abs(z) <= this.exitZ) {
-        return { action: 'EXIT', reason: 'TP' };
+      const barsHeld = bar - state.entryBar;
+      const absZ = Math.abs(z);
+
+      // Update trailing best Z
+      const bestZ = state.custom.trailingBestZ as number ?? absZ;
+      if (absZ < bestZ) {
+        state.custom.trailingBestZ = absZ;
       }
-      if (bar >= state.gracePeriodEnd && Math.abs(z) > this.stopLossZ) {
+
+      // TP: must hold minHoldBars first (aligned with live)
+      if (absZ <= this.exitZ) {
+        if (barsHeld >= this.minHoldBarsTP) {
+          return { action: 'EXIT', reason: 'TP' };
+        }
+        // Too early — hold
+        return { action: 'NONE' };
+      }
+
+      // SL (respecting grace period)
+      if (bar >= state.gracePeriodEnd && absZ > this.stopLossZ) {
         return { action: 'EXIT', reason: 'SL' };
+      }
+
+      // Trailing stop: Z was converging but bounced back
+      if (this.trailingStopEnabled) {
+        const currentBestZ = state.custom.trailingBestZ as number;
+        if (absZ >= currentBestZ + this.trailingStopZ) {
+          return { action: 'EXIT', reason: 'TRAILING' };
+        }
       }
     }
 

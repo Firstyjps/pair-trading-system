@@ -1,6 +1,7 @@
 import type { TradingQueries } from '../db/queries.js';
 import type { PositionManager } from '../trader/position-manager.js';
 import { getTradingConfig, updateTradingConfig } from '../config.js';
+import { getPendingProposal, approveProposal, rejectProposal, formatTuneResult } from '../autotuner/scheduler.js';
 import { createChildLogger } from '../logger.js';
 
 const log = createChildLogger('commands');
@@ -212,6 +213,41 @@ export function registerCommands(
         '• /alert list — แสดง alerts\n' +
         '• /alert add PAIR/BASE zscore 2.5 — แจ้งเมื่อ z-score ถึง 2.5\n' +
         '• /alert del <id> — ลบ alert'
+      );
+    },
+
+    async tune(ctx: CommandContext, subcmd?: string) {
+      if (subcmd === 'approve') {
+        const applied = approveProposal(queries);
+        if (applied) {
+          await ctx.reply(`✅ Config updated:\n${Object.entries(applied).map(([k, v]) => `  ${k}: ${v}`).join('\n')}`);
+        } else {
+          await ctx.reply('❌ ไม่มี proposal ที่รอ approve');
+        }
+        return;
+      }
+
+      if (subcmd === 'reject') {
+        rejectProposal();
+        await ctx.reply('✅ Proposal rejected — keeping current config');
+        return;
+      }
+
+      if (subcmd === 'status') {
+        const pending = getPendingProposal();
+        if (pending) {
+          await ctx.reply(formatTuneResult(pending));
+        } else {
+          await ctx.reply('ไม่มี auto-tune proposal ที่รอ approve');
+        }
+        return;
+      }
+
+      await ctx.reply(
+        'Usage:\n' +
+        '• /tune status — ดู proposal ปัจจุบัน\n' +
+        '• /tune approve — apply config ที่แนะนำ\n' +
+        '• /tune reject — ปฏิเสธ proposal'
       );
     },
 

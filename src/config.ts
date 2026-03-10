@@ -82,6 +82,42 @@ const TradingConfigSchema = z.object({
   // Format: ["PEPE/SHIB", "ETH/BTC"] (base names, not full ccxt symbols)
   targetPairs: z.array(z.string().regex(/^[A-Z0-9]+\/[A-Z0-9]+$/, 'Pair format must be "BASE_A/BASE_B"'))
     .optional(),
+
+  // ─── Kalman Filter ───
+  /** Use Kalman filter for dynamic hedge ratio instead of static OLS */
+  useKalmanFilter: z.boolean().default(false),
+  /** Kalman process noise (delta) — higher = faster adaptation (1e-5 to 1e-2) */
+  kalmanDelta: z.number().min(1e-6).max(0.1).default(1e-4),
+
+  // ─── Dynamic Leverage ───
+  /** Use ATR-based dynamic leverage instead of fixed */
+  useDynamicLeverage: z.boolean().default(false),
+  /** Target annualized volatility for leverage scaling */
+  targetVolatility: z.number().min(0.01).max(5).default(0.5),
+  /** Minimum leverage when using dynamic scaling */
+  minLeverage: z.number().int().min(1).max(10).default(1),
+
+  // ─── Cross-Pair Risk ───
+  /** Enable cross-pair risk check (prevent correlated overlap) */
+  crossPairRiskEnabled: z.boolean().default(true),
+  /** Max spread correlation between new and existing pairs */
+  maxSpreadCorrelation: z.number().min(0).max(1).default(0.7),
+
+  // ─── DB Cleanup ───
+  /** How often to run DB cleanup (ms). 0 = disabled. Default: weekly */
+  dbCleanupIntervalMs: z.number().int().min(0).default(604800000),
+
+  // ─── Auto-Tuning ───
+  /** Enable weekly auto-tune optimization */
+  autoTuneEnabled: z.boolean().default(false),
+  /** Cron schedule for auto-tune (default: Sunday 3 AM) */
+  autoTuneCron: z.string().default('0 3 * * 0'),
+  /** Number of random search rounds per auto-tune run */
+  autoTuneRounds: z.number().int().min(50).max(2000).default(200),
+  /** Lookback days for auto-tune data */
+  autoTuneLookbackDays: z.number().int().min(7).max(90).default(30),
+  /** Minimum Sharpe improvement to generate a proposal */
+  autoTuneMinImprovement: z.number().min(0).default(0.1),
 });
 
 export type TradingConfig = z.infer<typeof TradingConfigSchema>;

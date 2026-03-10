@@ -22,6 +22,9 @@ import { dollarNeutral } from './sizing/dollar-neutral.js';
 import { buildPnLReport } from './telegram/pnl-report.js';
 import { runBacktest, type BacktestConfig } from './backtest/engine.js';
 import { formatReport } from './backtest/report.js';
+import { trainKalman, kalmanUpdate, type KalmanState } from './scanner/kalman-filter.js';
+import { calculateDynamicLeverage } from './sizing/dynamic-leverage.js';
+import { checkCrossPairRisk, type OpenPairInfo } from './risk/portfolio-risk.js';
 import type { Direction, OHLCVCandle } from './types.js';
 import type { CointegrationResult } from './scanner/cointegration.js';
 import {
@@ -29,11 +32,13 @@ import {
   registerShutdownHandlers,
   getStartupTime,
 } from './lifecycle.js';
-import { logger } from './logger.js';
+import { logger, rotateLogs } from './logger.js';
+import { attachWebSocket, broadcastScannerUpdate, broadcastPositionUpdate, broadcastPositionOpened, broadcastPositionClosed, broadcastAccountUpdate } from './web/websocket.js';
 import cron from 'node-cron';
 
 // ─── In-memory caches for spread monitoring ───
 const betaCache = new Map<string, number>();
+const kalmanCache = new Map<string, KalmanState>(); // pair → Kalman state
 const priceCache = new Map<string, number[]>();
 const contractSizeCache = new Map<string, number>(); // base → contractSize (e.g. ETH → 0.01)
 
@@ -301,9 +306,22 @@ async function main() {
         const key = `${pair.symbolA}/${pair.symbolB}`;
         cointegrationResults.set(key, coint);
 
-        // Cache beta for spread monitoring
+        // Cache beta for spread monitoring — use Kalman if enabled
         if (coint.isCointegrated) {
-          betaCache.set(key, coint.beta);
+          if (config.useKalmanFilter) {
+            let kState = kalmanCache.get(key);
+            if (!kState) {
+              kState = trainKalman(pricesA, pricesB, config.kalmanDelta);
+              kalmanCache.set(key, kState);
+            } else {
+              const logA = Math.log(pricesA[pricesA.length - 1]);
+              const logB = Math.log(pricesB[pricesB.length - 1]);
+              kalmanUpdate(kState, logA, logB);
+            }
+            betaCache.set(key, kState.beta);
+          } else {
+            betaCache.set(key, coint.beta);
+          }
         }
       }
 
@@ -328,6 +346,9 @@ async function main() {
       const signals = persistSignals(queries, candidates);
 
       logger.info({ signals: signals.length }, 'Scan complete — signals generated');
+
+      // Broadcast scanner results to WebSocket clients
+      broadcastScannerUpdate(candidates, { signalCount: signals.length, pairsScanned: taggedPairs.length });
 
       // Step 8: Notify signals
       for (const signal of signals) {
@@ -430,15 +451,35 @@ async function main() {
           config.cointegrationPValue,
         );
 
-        // Cache beta for spread monitoring regardless of cointegration result
-        // (we trust the optimization — episodic cointegration is expected for meme pairs)
-        betaCache.set(pair, coint.beta);
+        // Cache beta for spread monitoring — use Kalman if enabled
+        if (config.useKalmanFilter) {
+          let kState = kalmanCache.get(pair);
+          if (!kState) {
+            kState = trainKalman(pricesA, pricesB, config.kalmanDelta);
+            kalmanCache.set(pair, kState);
+          } else {
+            // Incremental update with latest prices
+            const logA = Math.log(pricesA[pricesA.length - 1]);
+            const logB = Math.log(pricesB[pricesB.length - 1]);
+            kalmanUpdate(kState, logA, logB);
+          }
+          betaCache.set(pair, kState.beta);
+          logger.info({
+            pair,
+            kalmanBeta: kState.beta.toFixed(6),
+            olsBeta: coint.beta.toFixed(6),
+            n: kState.n,
+          }, 'Kalman beta updated');
+        } else {
+          betaCache.set(pair, coint.beta);
+        }
 
         logger.info({
           pair,
           pValue: coint.pValue.toFixed(4),
-          beta: coint.beta.toFixed(4),
+          beta: betaCache.get(pair)!.toFixed(4),
           isCointegrated: coint.isCointegrated,
+          method: config.useKalmanFilter ? 'kalman' : 'ols',
         }, 'Target pair cointegration result');
 
         // Always generate signals for target pairs (even if not currently cointegrated)
@@ -463,6 +504,9 @@ async function main() {
       const signals = persistSignals(queries, candidates);
 
       logger.info({ signals: signals.length, targetPairs }, 'Targeted scan complete');
+
+      // Broadcast scanner results to WebSocket clients
+      broadcastScannerUpdate(candidates, { signalCount: signals.length, targetPairs });
 
       // Notify signals
       for (const signal of signals) {
@@ -556,6 +600,30 @@ async function main() {
       return;
     }
 
+    // ── Cross-pair risk check ──
+    if (config.crossPairRiskEnabled) {
+      const openPositions = queries.getOpenPositions();
+      const openPairInfos: OpenPairInfo[] = openPositions
+        .filter(p => p.state === 'BOTH_LEGS_OPEN')
+        .map(p => {
+          const [sA, sB] = p.pair.split('/');
+          return { pair: p.pair, symbolA: sA, symbolB: sB };
+        });
+
+      const riskCheck = checkCrossPairRisk(
+        pair,
+        openPairInfos,
+        priceCache,
+        betaCache,
+        config.maxSpreadCorrelation,
+      );
+
+      if (!riskCheck.allowed) {
+        logger.info({ pair, reason: riskCheck.reason }, 'Cross-pair risk blocked');
+        return;
+      }
+    }
+
     try {
       // Fetch current prices for sizing
       const [tickerA, tickerB] = await Promise.all([
@@ -584,6 +652,26 @@ async function main() {
         logger.info({ pair, signalZ: zScore, liveZ: liveZ.toFixed(4) }, 'Pre-trade Z re-check passed');
       }
 
+      // ── Dynamic Leverage ──
+      let effectiveLeverage = config.maxLeverage;
+      if (config.useDynamicLeverage && cachedPricesA && cachedPricesB) {
+        const dynResult = calculateDynamicLeverage(
+          cachedPricesA, cachedPricesB, beta,
+          {
+            maxLeverage: config.maxLeverage,
+            minLeverage: config.minLeverage,
+            targetVolatility: config.targetVolatility,
+          },
+        );
+        effectiveLeverage = dynResult.leverage;
+        logger.info({
+          pair,
+          dynamicLeverage: effectiveLeverage,
+          spreadVol: dynResult.spreadVol.toFixed(4),
+          atr: dynResult.atr.toFixed(6),
+        }, 'Dynamic leverage applied');
+      }
+
       // Dollar-neutral sizing (use contract sizes from exchange)
       const ctSizeA = contractSizeCache.get(symbolA) ?? 1;
       const ctSizeB = contractSizeCache.get(symbolB) ?? 1;
@@ -595,7 +683,7 @@ async function main() {
         pricePerContractA,
         pricePerContractB,
         config.maxCapitalPerPair,
-        config.maxLeverage,
+        effectiveLeverage,
       );
 
       logger.info({
@@ -615,7 +703,7 @@ async function main() {
       // Ensure available USDT covers both legs before placing any orders
       try {
         const balance = await exchangeAdapter.fetchBalance();
-        const requiredMargin = (sizing.legANotional + sizing.legBNotional) / config.maxLeverage;
+        const requiredMargin = (sizing.legANotional + sizing.legBNotional) / effectiveLeverage;
         const safetyBuffer = 1.05; // 5% buffer for fees + slippage
         const requiredWithBuffer = requiredMargin * safetyBuffer;
 
@@ -652,13 +740,13 @@ async function main() {
           instrument: instrumentA,
           side: sideA as 'buy' | 'sell',
           size: sizing.legASize,
-          leverage: config.maxLeverage,
+          leverage: effectiveLeverage,
         },
         {
           instrument: instrumentB,
           side: sideB as 'buy' | 'sell',
           size: sizing.legBSize,
-          leverage: config.maxLeverage,
+          leverage: effectiveLeverage,
         },
         direction,
         zScore,
@@ -672,6 +760,7 @@ async function main() {
         const position = queries.getPosition(result.positionId);
         if (position) {
           await notifications.positionOpened(position);
+          broadcastPositionOpened(position);
         }
         logger.info({ pair, positionId: result.positionId }, 'Auto-trade executed');
       } else {
@@ -734,9 +823,10 @@ async function main() {
     app.get('/{*splat}', (_req: any, res: any) => {
       res.sendFile(path.join(__dirname, 'web', 'public', 'index.html'));
     });
-    app.listen(webPort, () => {
+    const httpServer = app.listen(webPort, () => {
       logger.info({ port: webPort }, 'Web dashboard running');
     });
+    attachWebSocket(httpServer);
   }
 
   // ═══ 3. Start Scanner Scheduler ═══
@@ -788,7 +878,10 @@ async function main() {
           const result = await closePairPosition(exchangeAdapter, queries, position, reason);
           if (result.success) {
             const closed = queries.getPosition(update.positionId);
-            if (closed) await notifications.positionClosed(closed);
+            if (closed) {
+              await notifications.positionClosed(closed);
+              broadcastPositionClosed(closed, reason);
+            }
           } else {
             await notifications.errorAlert(
               `Failed to close ${update.pair} (${reason}): ${result.error}`,
@@ -796,6 +889,9 @@ async function main() {
             );
           }
         }
+        // Broadcast position Z-score update to dashboard
+        broadcastPositionUpdate([{ pair: update.pair, zScore: update.currentZ, action: update.action }]);
+
         // Check z-score alerts for this pair
         const alerts = queries.getAlerts(undefined, update.pair);
         for (const a of alerts) {
@@ -1045,6 +1141,101 @@ async function main() {
     logger.info({ cron: monthlyCron }, 'Monthly summary scheduled');
   }
 
+  // ═══ 9. DB Cleanup Scheduler ═══
+  if (tradingConfig.dbCleanupIntervalMs > 0) {
+    logger.info({ intervalMs: tradingConfig.dbCleanupIntervalMs }, 'Starting DB cleanup scheduler');
+    const dbCleanupInterval = setInterval(() => {
+      try {
+        const result = queries.runFullCleanup();
+        logger.info(result, 'Scheduled DB cleanup completed');
+      } catch (err) {
+        logger.error({ error: err }, 'DB cleanup error');
+      }
+    }, tradingConfig.dbCleanupIntervalMs);
+    cleanupAndRegister('dbCleanup', dbCleanupInterval);
+
+    // Run initial cleanup after 5 minutes
+    setTimeout(() => {
+      try {
+        const result = queries.runFullCleanup();
+        logger.info(result, 'Initial DB cleanup completed');
+      } catch (err) {
+        logger.error({ error: err }, 'Initial DB cleanup error');
+      }
+    }, 300_000);
+  }
+
+  // ═══ 10. Auto-Tune Scheduler ═══
+  if (tradingConfig.autoTuneEnabled && cron.validate(tradingConfig.autoTuneCron)) {
+    const { runAutoTune, formatTuneResult } = await import('./autotuner/scheduler.js');
+
+    cron.schedule(tradingConfig.autoTuneCron, async () => {
+      try {
+        logger.info('Starting scheduled auto-tune optimization...');
+        const config = getTradingConfig();
+
+        // Gather price data from current pairs (use priceCache from scanner)
+        const pricePairs = new Map<string, { pricesA: number[]; pricesB: number[] }>();
+
+        if (config.targetPairs) {
+          for (const pair of config.targetPairs) {
+            const [symA, symB] = pair.split('/');
+            const pricesA = priceCache.get(symA);
+            const pricesB = priceCache.get(symB);
+            if (pricesA && pricesB && pricesA.length >= 100 && pricesB.length >= 100) {
+              pricePairs.set(pair, { pricesA, pricesB });
+            }
+          }
+        } else {
+          // Use open positions as pairs to tune
+          const openPositions = queries.getOpenPositions();
+          for (const pos of openPositions) {
+            const [symA, symB] = pos.pair.split('/');
+            const pricesA = priceCache.get(symA);
+            const pricesB = priceCache.get(symB);
+            if (pricesA && pricesB && pricesA.length >= 100 && pricesB.length >= 100) {
+              pricePairs.set(pos.pair, { pricesA, pricesB });
+            }
+          }
+        }
+
+        if (pricePairs.size === 0) {
+          logger.warn('Auto-tune: no price data available — skipping');
+          return;
+        }
+
+        const result = runAutoTune(pricePairs, {
+          rounds: config.autoTuneRounds,
+          lookbackDays: config.autoTuneLookbackDays,
+          capitalPerLeg: config.maxCapitalPerPair,
+          leverage: config.maxLeverage,
+          feeRate: config.feeRate,
+          minImprovement: config.autoTuneMinImprovement,
+        });
+
+        if (result) {
+          const message = formatTuneResult(result);
+          await notifications.sendToChat(envConfig.TELEGRAM_CHAT_ID, message);
+          logger.info('Auto-tune proposal sent to Telegram for approval');
+        } else {
+          logger.info('Auto-tune: current config is optimal — no proposal generated');
+        }
+      } catch (err) {
+        logger.error({ error: err }, 'Auto-tune error');
+      }
+    });
+
+    logger.info({ cron: tradingConfig.autoTuneCron }, 'Auto-tune scheduler enabled');
+  } else if (tradingConfig.autoTuneEnabled) {
+    logger.warn({ cron: tradingConfig.autoTuneCron }, 'Invalid auto-tune cron expression');
+  }
+
+  // ═══ 11. Daily Log Rotation ═══
+  cron.schedule('0 0 * * *', () => {
+    rotateLogs();
+  });
+  logger.info('Daily log rotation scheduled (midnight)');
+
   // ═══ System Ready ═══
   logger.info('Pair Trading System started successfully');
   logger.info({
@@ -1055,6 +1246,11 @@ async function main() {
     spreadMonitor: `${SPREAD_CHECK_MS / 1000}s`,
     reconciliation: `${reconIntervalMs / 1000}s`,
     orphanDetector: `${ORPHAN_CHECK_MS / 1000}s`,
+    kalmanFilter: tradingConfig.useKalmanFilter ? 'enabled' : 'disabled',
+    dynamicLeverage: tradingConfig.useDynamicLeverage ? 'enabled' : 'disabled',
+    crossPairRisk: tradingConfig.crossPairRiskEnabled ? 'enabled' : 'disabled',
+    dbCleanup: tradingConfig.dbCleanupIntervalMs > 0 ? `${tradingConfig.dbCleanupIntervalMs / 3600000}h` : 'disabled',
+    autoTune: tradingConfig.autoTuneEnabled ? `enabled (${tradingConfig.autoTuneCron})` : 'disabled',
   }, 'System ready — all monitors active');
 }
 

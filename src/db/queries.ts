@@ -10,8 +10,49 @@ import type {
   OHLCVCandle,
 } from '../types.js';
 import { createChildLogger } from '../logger.js';
+import fs from 'fs';
+import path from 'path';
 
 const log = createChildLogger('queries');
+
+const BACKUP_DIR = process.env.BACKUP_DIR || './data/backups';
+
+/**
+ * Export rows to a CSV file before deletion.
+ * Creates data/backups/ directory if needed.
+ */
+function exportToCsv(rows: Record<string, unknown>[], filename: string): string | null {
+  if (rows.length === 0) return null;
+
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+    const headers = Object.keys(rows[0]);
+    const csvLines = [headers.join(',')];
+
+    for (const row of rows) {
+      const values = headers.map(h => {
+        const val = row[h];
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        // Escape CSV: quote if contains comma, quote, or newline
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      });
+      csvLines.push(values.join(','));
+    }
+
+    const filePath = path.join(BACKUP_DIR, filename);
+    fs.writeFileSync(filePath, csvLines.join('\n'), 'utf-8');
+    log.info({ file: filePath, rows: rows.length }, 'CSV archive exported');
+    return filePath;
+  } catch (err) {
+    log.warn({ error: err, filename }, 'CSV export failed (non-fatal)');
+    return null;
+  }
+}
 
 export class TradingQueries {
   constructor(private db: Database.Database) {}
@@ -376,6 +417,82 @@ export class TradingQueries {
 
   deleteAlert(id: string): void {
     this.db.prepare('DELETE FROM alerts WHERE id = ?').run(id);
+  }
+
+  // ─── Cleanup ───
+
+  /**
+   * Delete z_score_history older than given days.
+   */
+  cleanOldZScoreHistory(olderThanDays: number = 30): number {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = this.db.prepare('DELETE FROM z_score_history WHERE timestamp < ?').run(cutoff);
+    return result.changes;
+  }
+
+  /**
+   * Delete old signals that have been acted on (or are too old to be relevant).
+   */
+  cleanOldSignals(olderThanDays: number = 30): number {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = this.db.prepare('DELETE FROM signals WHERE created_at < ?').run(cutoff);
+    return result.changes;
+  }
+
+  /**
+   * Delete old OHLCV cache data.
+   */
+  cleanOldOHLCV(olderThanDays: number = 14): number {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = this.db.prepare('DELETE FROM ohlcv_cache WHERE fetched_at < ?').run(cutoff);
+    return result.changes;
+  }
+
+  /**
+   * Run full DB cleanup: export old data as CSV, then delete, then VACUUM.
+   */
+  runFullCleanup(): { zScores: number; notifications: number; signals: number; ohlcv: number; csvFiles: string[] } {
+    const date = new Date().toISOString().split('T')[0];
+    const csvFiles: string[] = [];
+
+    // 1. Z-Score History (>30 days)
+    const zCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const oldZScores = this.db.prepare('SELECT * FROM z_score_history WHERE timestamp < ?').all(zCutoff);
+    const zCsv = exportToCsv(oldZScores as Record<string, unknown>[], `zscore-archive-${date}.csv`);
+    if (zCsv) csvFiles.push(zCsv);
+    const zScores = this.cleanOldZScoreHistory(30);
+
+    // 2. Notifications (>7 days)
+    const nCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const oldNotifs = this.db.prepare('SELECT * FROM notifications WHERE sent_at < ?').all(nCutoff);
+    const nCsv = exportToCsv(oldNotifs as Record<string, unknown>[], `notifications-archive-${date}.csv`);
+    if (nCsv) csvFiles.push(nCsv);
+    const notifications = this.cleanOldNotifications(7 * 24 * 60 * 60 * 1000);
+
+    // 3. Signals (>30 days)
+    const sCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const oldSignals = this.db.prepare('SELECT * FROM signals WHERE created_at < ?').all(sCutoff);
+    const sCsv = exportToCsv(oldSignals as Record<string, unknown>[], `signals-archive-${date}.csv`);
+    if (sCsv) csvFiles.push(sCsv);
+    const signals = this.cleanOldSignals(30);
+
+    // 4. OHLCV (>14 days)
+    const oCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const oldOhlcv = this.db.prepare('SELECT * FROM ohlcv_cache WHERE fetched_at < ?').all(oCutoff);
+    const oCsv = exportToCsv(oldOhlcv as Record<string, unknown>[], `ohlcv-archive-${date}.csv`);
+    if (oCsv) csvFiles.push(oCsv);
+    const ohlcv = this.cleanOldOHLCV(14);
+
+    // VACUUM to reclaim disk space
+    try {
+      this.db.pragma('wal_checkpoint(TRUNCATE)');
+      this.db.exec('VACUUM');
+    } catch (err) {
+      log.warn({ error: err }, 'VACUUM failed (non-fatal)');
+    }
+
+    log.info({ zScores, notifications, signals, ohlcv, csvFiles }, 'DB cleanup completed (with CSV archive)');
+    return { zScores, notifications, signals, ohlcv, csvFiles };
   }
 
   // ─── Utility ───
