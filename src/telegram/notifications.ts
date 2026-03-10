@@ -79,7 +79,6 @@ export class NotificationService {
       `Direction: ${this.escMd(signal.direction)}`,
       `Z-Score: ${signal.z_score.toFixed(4)}`,
       `Correlation: ${signal.correlation.toFixed(4)}`,
-      `Coint p-value: ${signal.cointegration_pvalue.toFixed(4)}`,
       `Half-life: ${signal.half_life.toFixed(1)} bars`,
     ].join('\n');
 
