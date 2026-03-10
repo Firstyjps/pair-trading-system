@@ -817,7 +817,10 @@ async function loadAccountData() {
 
     setText('#port-equity', fmtUsd(data.totalEquity), valClass(data.totalEquity));
     setText('#port-available', fmtUsd(data.availableBalance));
-    setText('#port-upnl', fmtUsd(data.unrealizedPnl), valClass(data.unrealizedPnl));
+    // Calculate UPL from exchange positions (more accurate than balance API)
+    const exchData = await api('/positions/exchange');
+    const actualUpl = exchData?.positions?.reduce((sum, p) => sum + (p.upl ?? 0), 0) ?? data.unrealizedPnl;
+    setText('#port-upnl', fmtUsd(actualUpl), valClass(actualUpl));
     setText('#port-frozen', fmtUsd(data.frozenBalance));
 
     const acctTypes = { '1': 'Simple', '2': 'Single-CCY Margin', '3': 'Multi-CCY Margin', '4': 'Portfolio Margin' };
