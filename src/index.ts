@@ -293,7 +293,7 @@ async function main() {
 
       // Step 5: Cointegration tests
       const cointegrationResults = new Map<string, CointegrationResult>();
-      for (const pair of taggedPairs.slice(0, 30)) { // Top 30 correlated pairs
+      for (const pair of taggedPairs.slice(0, 100)) { // Top 100 correlated pairs
         const pricesA = priceData.get(pair.symbolA);
         const pricesB = priceData.get(pair.symbolB);
         if (!pricesA || !pricesB) continue;
