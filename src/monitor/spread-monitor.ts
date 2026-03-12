@@ -73,9 +73,19 @@ export async function checkSpreads(
       const minHoldMs = minHoldBars * barMs;
       const positionAge = Date.now() - new Date(pos.opened_at).getTime();
 
+      // Track how long Z has been in TP zone (consecutive minutes)
+      const meta = pos.metadata ? JSON.parse(pos.metadata) : {};
+      const tpZoneTimeout = 3; // bars (hours) in TP zone before allowing loss exit
+      const maxHoldBars = 24;  // absolute max hold time in bars (hours)
+      const holdBars = positionAge / barMs;
+
       if (shouldTriggerTakeProfit(zScore, config.exitZScore)) {
+        // Count consecutive bars in TP zone
+        const barsInTPZone = (meta.barsInTPZone ?? 0) + 1;
+        metadata = JSON.stringify({ ...meta, barsInTPZone });
+
         if (positionAge >= minHoldMs) {
-          // Estimate PnL before closing — don't TP if we'd lose money after fees
+          // Estimate PnL before closing
           const entryA = pos.leg_a_entry_price ?? 0;
           const entryB = pos.leg_b_entry_price ?? 0;
           if (entryA > 0 && entryB > 0) {
@@ -91,13 +101,18 @@ export async function checkSpreads(
             const estFees = (notionalA + notionalB) * (config.takerFeeRate ?? config.feeRate ?? 0.0006) * 2;
             const netPnl = grossPnl - estFees;
 
-            if (netPnl <= 0) {
-              log.info({
-                pair: pos.pair, zScore, grossPnl: grossPnl.toFixed(4), estFees: estFees.toFixed(4), netPnl: netPnl.toFixed(4),
-              }, 'TP conditions met but estimated PnL negative after fees — holding');
-            } else {
+            if (netPnl > 0) {
               action = 'EXIT_TP';
               log.info({ pair: pos.pair, zScore, netPnl: netPnl.toFixed(4), exitZ: config.exitZScore }, 'Take profit triggered (profitable after fees)');
+            } else if (barsInTPZone >= tpZoneTimeout * 60) {
+              // Z in TP zone for 3+ hours — exit even at loss
+              action = 'EXIT_TP';
+              log.info({ pair: pos.pair, zScore, netPnl: netPnl.toFixed(4), barsInTPZone, tpZoneTimeout }, 'TP zone timeout — exiting at loss');
+            } else {
+              log.info({
+                pair: pos.pair, zScore, grossPnl: grossPnl.toFixed(4), estFees: estFees.toFixed(4), netPnl: netPnl.toFixed(4),
+                barsInTPZone, tpZoneTimeoutMin: tpZoneTimeout * 60,
+              }, 'TP conditions met but PnL negative — waiting for TP zone timeout');
             }
           } else {
             action = 'EXIT_TP';
@@ -110,24 +125,32 @@ export async function checkSpreads(
             requiredMin: Math.floor(minHoldMs / 60000),
           }, 'TP conditions met but minimum hold time not reached — holding');
         }
-      } else if (shouldTriggerStopLoss(pos.opened_at, zScore, config.stopLossZScore, config.gracePeriodMs)) {
-        action = 'EXIT_SL';
-        log.warn({ pair: pos.pair, zScore, slZ: config.stopLossZScore }, 'Stop loss triggered');
-      } else if (config.trailingStopEnabled && config.trailingStopZ > 0) {
-        const absZ = Math.abs(zScore);
-        // Initialize trailingBestZ from entry Z (not current Z) so we track from the start
-        const entryAbsZ = Math.abs(pos.entry_z_score);
-        let bestZ: number;
-        try {
-          const meta = pos.metadata ? JSON.parse(pos.metadata) : {};
-          bestZ = Math.min(meta.trailingBestZ ?? entryAbsZ, absZ);
-        } catch { bestZ = Math.min(entryAbsZ, absZ); }
-        if (absZ >= bestZ + config.trailingStopZ) {
-          action = 'EXIT_TRAILING';
-          log.info({ pair: pos.pair, zScore, bestZ, trailZ: config.trailingStopZ }, 'Trailing stop triggered');
+      } else {
+        // Z left TP zone — reset counter
+        if (meta.barsInTPZone) {
+          metadata = JSON.stringify({ ...meta, barsInTPZone: 0 });
         }
-        const meta = pos.metadata ? JSON.parse(pos.metadata) : {};
-        metadata = JSON.stringify({ ...meta, trailingBestZ: bestZ });
+
+        if (holdBars >= maxHoldBars) {
+          // Max hold time exceeded — force exit
+          action = 'EXIT_TP';
+          log.warn({ pair: pos.pair, zScore, holdBars: holdBars.toFixed(1), maxHoldBars }, 'Max hold time exceeded — force exit');
+        } else if (shouldTriggerStopLoss(pos.opened_at, zScore, config.stopLossZScore, config.gracePeriodMs)) {
+          action = 'EXIT_SL';
+          log.warn({ pair: pos.pair, zScore, slZ: config.stopLossZScore }, 'Stop loss triggered');
+        } else if (config.trailingStopEnabled && config.trailingStopZ > 0) {
+          const absZ = Math.abs(zScore);
+          const entryAbsZ = Math.abs(pos.entry_z_score);
+          let bestZ: number;
+          try {
+            bestZ = Math.min(meta.trailingBestZ ?? entryAbsZ, absZ);
+          } catch { bestZ = Math.min(entryAbsZ, absZ); }
+          if (absZ >= bestZ + config.trailingStopZ) {
+            action = 'EXIT_TRAILING';
+            log.info({ pair: pos.pair, zScore, bestZ, trailZ: config.trailingStopZ }, 'Trailing stop triggered');
+          }
+          metadata = JSON.stringify({ ...meta, trailingBestZ: bestZ });
+        }
       }
 
       if (metadata && action === 'HOLD') {

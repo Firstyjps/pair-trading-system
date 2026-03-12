@@ -83,6 +83,7 @@ export function runBacktest(
   let cooldownUntil = 0;
   let gracePeriodEnd = 0;
   let trailingBestZ = 0;       // Track best (lowest) |Z| for trailing stop
+  let barsInTPZone = 0;        // Consecutive bars Z has been in TP zone
 
   const minHoldBars = config.minHoldBarsTP ?? 2;
   const trailingEnabled = config.trailingStopEnabled ?? false;
@@ -112,6 +113,7 @@ export function runBacktest(
         entrySpread = spread[i];
         gracePeriodEnd = i + config.gracePeriodBars;
         trailingBestZ = Math.abs(z);
+        barsInTPZone = 0;
       } else if (z < -config.entryZ && Math.abs(z) < config.stopLossZ - config.safeZoneBuffer) {
         inPosition = true;
         direction = 'LONG_SPREAD';
@@ -120,6 +122,7 @@ export function runBacktest(
         entrySpread = spread[i];
         gracePeriodEnd = i + config.gracePeriodBars;
         trailingBestZ = Math.abs(z);
+        barsInTPZone = 0;
       }
     } else {
       const barsHeld = i - entryBar;
@@ -133,10 +136,14 @@ export function runBacktest(
       // Check exit conditions
       let closeReason: 'TP' | 'SL' | 'TRAILING' | null = null;
 
-      // Take profit — must hold minHoldBars + check profitability (aligned with live)
+      // Track bars in TP zone for timeout logic
+      const tpZoneTimeout = 3; // bars in TP zone before allowing loss exit
+      const maxHoldBars = 24;  // absolute max hold time in bars
+
+      // Take profit — must hold minHoldBars + check profitability with zone timeout
       if (absZ <= config.exitZ) {
+        barsInTPZone++;
         if (barsHeld >= minHoldBars) {
-          // Profitability check: estimate PnL before closing
           const spreadChange = spread[i] - entrySpread;
           const pnlDirection = direction === 'SHORT_SPREAD' ? -1 : 1;
           const rawPnl = pnlDirection * spreadChange * config.capitalPerLeg * config.leverage;
@@ -145,18 +152,25 @@ export function runBacktest(
 
           if (netPnl > 0) {
             closeReason = 'TP';
+          } else if (barsInTPZone >= tpZoneTimeout) {
+            closeReason = 'TP'; // Z in TP zone long enough — exit even at loss
           }
-          // If netPnl <= 0, hold — don't close at a loss just because Z hit exit
         }
-        // If barsHeld < minHoldBars, hold — too early
-      }
-      // Stop loss (respecting grace period)
-      else if (i >= gracePeriodEnd && absZ > config.stopLossZ) {
-        closeReason = 'SL';
-      }
-      // Trailing stop — Z was converging but now bouncing back
-      else if (trailingEnabled && absZ >= trailingBestZ + trailingStopZ) {
-        closeReason = 'TRAILING';
+      } else {
+        barsInTPZone = 0; // Reset when Z leaves TP zone
+
+        if (barsHeld >= maxHoldBars) {
+          // Max hold time exceeded — force exit
+          closeReason = 'TP';
+        }
+        // Stop loss (respecting grace period)
+        else if (i >= gracePeriodEnd && absZ > config.stopLossZ) {
+          closeReason = 'SL';
+        }
+        // Trailing stop — Z was converging but now bouncing back
+        else if (trailingEnabled && absZ >= trailingBestZ + trailingStopZ) {
+          closeReason = 'TRAILING';
+        }
       }
 
       if (closeReason) {
